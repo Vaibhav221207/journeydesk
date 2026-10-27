@@ -130,7 +130,22 @@ std::vector<json> service_catalogue() {
         s("GJ05","GJ-T202","Surat Intercity","Train","Surat","Ahmedabad","17:00","20:30",0,210,330),
         s("MH03","MH-B102","Deccan Shuttle","Bus","Mumbai","Pune","10:00","13:30",0,210,380),
         s("MH04","MH-B103","Mumbai Connector","Bus","Pune","Mumbai","16:00","19:30",0,210,380),
-        s("GJ06","GJ-T203","Coast Intercity","Train","Surat","Mumbai","08:30","12:00",0,210,350)
+        s("GJ06","GJ-T203","Coast Intercity","Train","Surat","Mumbai","08:30","12:00",0,210,350),
+        s("GJ07","GJ-T204","Gujarat Morning Intercity","Train","Ahmedabad","Surat","07:15","10:45",0,210,330),
+        s("GJ08","GJ-B104","Deccan Nightliner","Bus","Ahmedabad","Pune","18:30","07:00",1,750,1200),
+        s("GJ09","GJ-T205","Sabarmati Deccan Express","Train","Ahmedabad","Pune","20:00","05:30",1,570,780),
+        s("MH05","MH-B104","Tapi Connector","Bus","Mumbai","Surat","07:30","12:00",0,270,500),
+        s("MH06","MH-T202","Coast Return","Train","Mumbai","Surat","18:15","21:45",0,210,350),
+        s("MH07","MH-T203","Deccan Intercity","Train","Mumbai","Pune","06:45","09:45",0,180,260),
+        s("GJ10","GJ-B105","Sabarmati Shuttle","Bus","Surat","Ahmedabad","14:30","19:00",0,270,450),
+        s("GJ11","GJ-B106","Mumbai Coastliner","Bus","Surat","Mumbai","15:00","19:30",0,270,500),
+        s("GJ12","GJ-B107","Tapi Deccan Nightliner","Bus","Surat","Pune","22:00","05:30",1,450,780),
+        s("GJ13","GJ-T206","Tapi Deccan Express","Train","Surat","Pune","16:00","22:00",0,360,540),
+        s("MH08","MH-B105","Sabarmati Nightliner","Bus","Pune","Ahmedabad","18:00","06:30",1,750,1200),
+        s("MH09","MH-T204","Deccan Sabarmati Express","Train","Pune","Ahmedabad","19:30","05:00",1,570,780),
+        s("MH10","MH-T205","Deccan Return","Train","Pune","Mumbai","17:30","20:30",0,180,260),
+        s("MH11","MH-B106","Tapi Nightliner","Bus","Pune","Surat","21:00","04:30",1,450,780),
+        s("MH12","MH-T206","Deccan Tapi Express","Train","Pune","Surat","07:00","13:00",0,360,540)
     };
 }
 struct Booking {std::string reference,id,name,gender,contact,status;int age=0,seat=0;};

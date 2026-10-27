@@ -77,11 +77,77 @@ int main() {
         require(!bus["results"].empty() && !train["results"].empty(), "missing mode alternatives");
         require(bus["results"][0]["service"]["capacity"]==12 && train["results"][0]["service"]["capacity"]==18, "capacity");
     });
-    test("search rejects same and unknown cities and returns empty valid route", [] {
+    test("search rejects same and unknown cities and serves Pune to Ahmedabad", [] {
         ReservationEngine e({},"2026-10-27");
         error(400,[&]{e.search({{"source","Ahmedabad"},{"destination","Ahmedabad"},{"date","2026-10-28"},{"mode","Bus"}});});
         error(400,[&]{e.search({{"source","Mars"},{"destination","Mumbai"},{"date","2026-10-28"},{"mode","Bus"}});});
-        require(e.search({{"source","Pune"},{"destination","Ahmedabad"},{"date","2026-10-28"},{"mode","Train"}})["results"].empty(), "unmatched route should be empty");
+        require(!e.search({{"source","Pune"},{"destination","Ahmedabad"},{"date","2026-10-28"},{"mode","Train"}})["results"].empty(), "Pune to Ahmedabad train is missing");
+    });
+    // Break caught: an omitted direction or transport mode leaves a selectable city pair unbookable.
+    test("every ordered city pair has direct bus and train search results", [] {
+        ReservationEngine e({},"2026-10-27");const auto catalog=e.catalog();
+        require(catalog["cities"]==json({"Ahmedabad","Mumbai","Surat","Pune"}),"route expansion changed the supported cities");
+        const std::vector<std::string> cities{"Ahmedabad","Mumbai","Surat","Pune"};
+        std::set<std::string> returned_ids;std::string missing;int combinations=0;
+        for(const auto& source:cities)for(const auto& destination:cities)if(source!=destination)for(const auto& mode:{"Bus","Train"}) {
+            const auto results=e.search({{"source",source},{"destination",destination},{"date","2026-10-28"},{"mode",mode}})["results"];
+            ++combinations;
+            if(results.empty()) {missing+=source+" -> "+destination+" "+mode+"; ";continue;}
+            const std::size_t expected=(source=="Ahmedabad" && destination=="Mumbai" && std::string(mode)=="Bus")?2:1;
+            require(results.size()==expected,"unexpected duplicate direct services for "+source+" -> "+destination+" "+mode);
+            std::string previous_departure;
+            for(const auto& result:results) {
+                const auto& service=result["service"];
+                require(service["source"]==source && service["destination"]==destination && service["mode"]==mode,"search returned the wrong direction or mode");
+                require(result["booked"]==0 && result["waiting"]==0 && result["available"]==(std::string(mode)=="Bus"?12:18),"new direct journey should start fully available");
+                const auto departure=service["departure"].get<std::string>();
+                require(previous_departure.empty() || previous_departure<=departure,"search departures are not sorted");
+                previous_departure=departure;returned_ids.insert(service["id"].get<std::string>());
+            }
+        }
+        require(missing.empty(),"missing direct routes: "+missing);
+        require(combinations==24 && returned_ids.size()==25 && catalog["services"].size()==25,"catalogue must expose 24 route/mode choices across 25 services");
+    });
+    // Break caught: duplicate identifiers make booking ambiguous; inconsistent times misstate the trip length.
+    test("service identities are unique and timetable durations agree with arrival days", [] {
+        ReservationEngine e({},"2026-10-27");const auto catalog=e.catalog();std::set<std::string> ids,numbers;
+        auto minutes=[](const json& value) {
+            require(value.is_string(),"timetable time must be a string");const auto time=value.get<std::string>();
+            require(time.size()==5 && time[2]==':' && time[0]>='0' && time[0]<='9' && time[1]>='0' && time[1]<='9' && time[3]>='0' && time[3]<='9' && time[4]>='0' && time[4]<='9',"timetable must use HH:MM");
+            const int hour=(time[0]-'0')*10+time[1]-'0',minute=(time[3]-'0')*10+time[4]-'0';
+            require(hour<24 && minute<60,"invalid timetable clock time");return hour*60+minute;
+        };
+        for(const auto& service:catalog["services"]) {
+            const auto id=service["id"].get<std::string>();
+            require(!id.empty() && ids.insert(id).second,"duplicate or empty service ID");
+            require(!service["number"].get<std::string>().empty() && numbers.insert(service["number"].get<std::string>()).second,"duplicate or empty service number");
+            require(service["arrival_day_offset"].is_number_integer() && service["arrival_day_offset"]>=0 && service["arrival_day_offset"]<=1,"invalid arrival day offset");
+            const int duration=minutes(service["arrival"])-minutes(service["departure"])+service["arrival_day_offset"].get<int>()*1440;
+            require(duration>0 && service["duration_minutes"]==duration,"duration disagrees with timetable for "+id);
+            require(service["fare"].is_number_integer() && service["fare"]>0,"invalid fare for "+id);
+        }
+    });
+    // Break caught: listing a newly added service without usable journey allocation or cancellation is insufficient.
+    test("every direct bus and train service can book cancel and retain ticket history", [] {
+        ReservationEngine e({},"2026-10-27");
+        const std::vector<std::string> cities{"Ahmedabad","Mumbai","Surat","Pune"};
+        std::set<std::string> booked_services;
+        for(const auto& source:cities)for(const auto& destination:cities)if(source!=destination)for(const auto& mode:{"Bus","Train"}) {
+            const auto results=e.search({{"source",source},{"destination",destination},{"date","2026-10-28"},{"mode",mode}})["results"];
+            require(!results.empty(),"missing direct service for "+source+" to "+destination+" "+mode);
+            for(const auto& result:results) {
+            const auto service_id=result["service"]["id"].get<std::string>();const int capacity=std::string(mode)=="Bus"?12:18;
+            auto request=booking("New Route Traveller","9876543210",service_id);request["seat_number"]=capacity;
+            const auto booked=e.book(request);
+            require(booked["ticket"]["status"]=="Confirmed" && booked["ticket"]["seat_number"]==capacity && booked["ticket"]["service"]["source"]==source && booked["ticket"]["service"]["destination"]==destination,"route booking ignored service or preferred seat");
+            require(e.journey(key(service_id))["counts"]["available"]==capacity-1,"booking did not reserve new route seat");
+            const auto cancelled=e.cancel(auth(booked["ticket"]));
+            require(cancelled["cancelled"]["status"]=="Cancelled" && cancelled["journey"]["counts"]["available"]==capacity,"new route cancellation did not free the seat");
+            require(e.ticket(auth(booked["ticket"]))["ticket"]["status"]=="Cancelled","new route ticket history was lost");
+            booked_services.insert(service_id);
+            }
+        }
+        require(booked_services.size()==25,"not every listed service completed the booking lifecycle");
     });
     test("automatic allocation picks smallest free seat and generates identity", [] {
         ReservationEngine e({},"2026-10-27"); auto a=e.book(booking())["ticket"]; auto b=e.book(booking("Ben Shah"))["ticket"];

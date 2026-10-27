@@ -10,7 +10,7 @@ Keep the existing allocation guarantees: lowest free seat by custom min-heap; ex
 
 The four structures are a fixed seat array, custom singly linked booking list, custom linked FIFO queue and custom binary minimum heap. Use standard maps to locate journeys, not to replace the demonstrated structures. The bundled HTTP and JSON libraries are infrastructure; reservation rules and DSA implementations are student-readable C++ source.
 
-Use a small fictional direct-route catalogue for Ahmedabad, Mumbai, Surat and Pune, including Ahmedabad–Mumbai bus and train alternatives and reverse-direction examples. No intermediate-station seat reuse, payment gateway, Tatkal/quota engine, real-time train feed, account system or SMS service is included.
+Use a fictional direct-route catalogue for Ahmedabad, Mumbai, Surat and Pune. Every ordered pair of distinct cities has both bus and train options: 24 route-and-transport combinations across 25 services. The original ten services retain their identifiers and details, including the second Ahmedabad–Mumbai bus and the isolated GJ01 demonstration. No intermediate-station seat reuse, payment gateway, Tatkal/quota engine, real-time train feed, account system or SMS service is included.
 
 Local JSON persistence makes the downloadable submission self-contained. Package source, build/run instructions, a verified Windows executable, third-party notices, tests and a viva/report document. Provide a Docker deployment path for a C++ host. Do not label the previous PythonAnywhere deployment as the C++ version; publishing the replacement depends on a suitable authenticated host with persistent storage.
 

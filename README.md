@@ -59,7 +59,7 @@ For very limited build memory, reduce parallelism to one. JavaScript syntax can 
 
 ## Scope
 
-Schedules, fares and availability belong to this project. They are fictional and are **not connected to IRCTC or an actual bus operator**. Four cities and a small set of direct services keep the algorithms understandable. One traveller is booked per reservation. There is no payment, SMS or real train tracking integration.
+Schedules, fares and availability belong to this project. They are fictional and are **not connected to IRCTC or an actual bus operator**. Ahmedabad, Mumbai, Surat and Pune each have direct bus and train options to every other listed city, in both directions. The catalogue contains 25 services across 24 route-and-transport combinations, including two Ahmedabad–Mumbai buses. One traveller is booked per reservation. There is no payment, SMS or real train tracking integration.
 
 Passenger manifests and cancellation controls are separated from the public seat map. The public map shows only whether a seat is available. Individual ticket lookup requires the booking reference and contact number. The normal desk requires its private access key. Use fictional personal details for classroom demonstrations.
 

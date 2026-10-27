@@ -64,7 +64,7 @@ Cancellation:
 4. If confirmed and nobody is waiting, clear the array slot and return its number to the heap.
 5. Save before publishing, preserve cancelled history, and return the updated result.
 
-Search and route discovery use a small catalogue of direct services. Matching uses the selected source/destination/mode; service results are ordered by departure time. An unmatched valid route returns an empty state. No intermediate-station seat sharing is implemented.
+Search and route discovery use 25 fictional direct services among Ahmedabad, Mumbai, Surat and Pune. Each city connects to the other three by both bus and train, giving 24 directed route-and-transport combinations; Ahmedabad–Mumbai has a second bus departure. Matching uses the selected source/destination/mode, and service results are ordered by departure time. No intermediate-station seat sharing is implemented.
 
 ## Example demonstration
 
