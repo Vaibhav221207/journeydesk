@@ -2,6 +2,12 @@
 
 A college data-structures project with a **C++20 backend** and an HTML, CSS and JavaScript browser interface. The backend runs the HTTP API, validates passenger details, allocates seats, manages waiting queues and stores bookings. The browser displays the interface; it does not implement the reservation rules.
 
+## Live demonstration
+
+Open **[Journey Desk](https://journeydesk.onrender.com/)**. The public deployment runs the native C++20 executable in a Linux Docker container on Render. Its [health endpoint](https://journeydesk.onrender.com/api/health) identifies the backend as `C++20`.
+
+This is a **temporary classroom demo** on Render's free web service plan. It sleeps after 15 minutes without inbound traffic; the next visit can take about a minute to wake it. Bookings are saved to local JSON, which is **ephemeral on this host**: records disappear when the service restarts, redeploys or sleeps. Use fictional details and keep any demonstration ticket information you need. See `HOSTING.md` and `VERIFICATION.md` for deployment details and verification limits.
+
 ## Run on Windows
 
 1. Extract the entire ZIP into a folder.
@@ -9,7 +15,7 @@ A college data-structures project with a **C++20 backend** and an HTML, CSS and 
 3. The C++ server opens `http://127.0.0.1:8080/` in your browser. Keep its terminal open while using the project.
 4. Press Ctrl+C in that terminal to stop the server.
 
-The supplied `bin/journeydesk.exe` runs without installing Python, Node.js or a compiler. The **desk access key** appears in the server terminal. Use it to open the normal passenger manifest. The fictional demo is accessible without that key.
+The submission ZIP includes `bin/journeydesk.exe`, which runs without installing Python, Node.js or a compiler. The GitHub repository contains source only; build it using the instructions below. The **desk access key** appears in the server terminal. Use it to open the normal passenger manifest. The fictional demo is accessible without that key.
 
 If port 8080 is occupied, run from the project folder:
 

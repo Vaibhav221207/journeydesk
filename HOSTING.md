@@ -1,6 +1,18 @@
 # Hosting the C++ version
 
-The C++ executable serves the API and frontend itself. Uploading the HTML alone will not provide bookings. The previous Python WSGI deployment must not be described as the C++ backend.
+The C++ executable serves the API and frontend itself. Uploading the HTML alone will not provide bookings.
+
+## Live Render deployment
+
+The native C++20 application is live at **[https://journeydesk.onrender.com/](https://journeydesk.onrender.com/)**. It runs as a Docker web service on Render's **free** compute plan in **Ohio**. No Python or Node.js process implements the backend.
+
+The deployment was created and verified through the official Render CLI and API. Render MCP was not used. The live source commit is `0c6da1d176433f7f26ee42783cb7fda31dca97b4`; the deploy reached `live` on 27 October 2026. The Docker build ran both CTest suites successfully, and HTTPS checks verified the native backend, frontend assets and reservation flows. See `VERIFICATION.md` for the detailed record and remaining visual checks.
+
+The service listens on `0.0.0.0` using `PORT`. Configure `RESERVATION_PUBLIC_HOST` as the exact public hostname, `journeydesk.onrender.com`, without a scheme or path. The app's hostname allowlist also applies to the HTTP health check at `/api/health`. If the assigned hostname changes, update this setting before redeploying. A start wrapper can obtain Render's assigned hostname from `RENDER_EXTERNAL_HOSTNAME` at runtime.
+
+**This deployment is a temporary demo, not durable booking storage.** The current JSON file is `/app/data/bookings.json` inside the container. Render's free service uses an ephemeral filesystem: restarting, redeploying or spinning down deletes local booking changes. Free services sleep after 15 minutes without inbound traffic and usually take about one minute to wake on the next request. A persistent disk requires a paid service; adding an external datastore would require changes to this app. No persistent disk or external datastore is configured for the free demo.
+
+Official references: [Docker deployment](https://render.com/docs/docker), [health checks](https://render.com/docs/health-checks), [free service limits](https://render.com/docs/free).
 
 ## PythonAnywhere native socket hosting
 
@@ -43,7 +55,7 @@ The supplied `Dockerfile` builds and tests the C++ app, then runs it as an unpri
 - `PORT` to the platform's HTTP port (default 8080).
 - `RESERVATION_PUBLIC_HOST` to the exact public hostname, without scheme or path.
 - `RESERVATION_DESK_KEY` to a private value of at least 12 characters.
-- `RESERVATION_DATA_FILE` to a file on a persistent mounted directory.
+- `RESERVATION_DATA_FILE` to a file in a writable directory. To preserve bookings across container replacement, that directory must use durable storage; the current free Render deployment does not.
 
 Local example:
 
@@ -52,8 +64,8 @@ docker build -t journeydesk .
 docker run --rm -p 8080:8080 -v journey-data:/app/data journeydesk
 ```
 
-Render supports Docker web services: https://render.com/docs/docker . Its free web services have **ephemeral files**: bookings saved only to local JSON disappear on restart, redeploy or spin-down. Persistent disks require a paid service. A free deployment must be labelled as a temporary demo unless durable storage is added. Official limits: https://render.com/docs/free . Do not purchase a hosting plan automatically.
+The local Docker example uses a named volume for local persistence. That volume is not part of the Render deployment.
 
 ## Status
 
-Deployment of the revised native C++ version has not yet been verified. Local compilation, testing and visual verification are tracked separately in `VERIFICATION.md`. The existing PythonAnywhere URL currently belongs to the earlier Python version until a successful native cutover is recorded.
+The Render URL above serves the verified native C++20 backend. The earlier PythonAnywhere website is a separate deployment; no native Unix-socket cutover was performed there. Desktop/mobile visual inspection remains pending and is tracked in `VERIFICATION.md`.
