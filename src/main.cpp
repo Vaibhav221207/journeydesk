@@ -1,14 +1,12 @@
 #include "web.hpp"
 #include "httplib.h"
+#include "desk_key.hpp"
 
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
-#include <random>
-#include <sstream>
 #include <string>
 
 #ifdef _WIN32
@@ -24,14 +22,6 @@ namespace {
 std::string env(const char* name, std::string fallback = {}) {
     const auto* value = std::getenv(name);
     return value && *value ? value : std::move(fallback);
-}
-
-std::string random_key() {
-    std::random_device random;
-    std::ostringstream key;
-    key << std::hex << std::setfill('0');
-    for (int i = 0; i < 4; ++i) key << std::setw(8) << random();
-    return key.str();
 }
 
 int port_number(const std::string& value) {
@@ -106,7 +96,7 @@ int main(int argc, char** argv) {
         }
         if (!fs::is_regular_file(static_root / "index.html"))
             throw std::invalid_argument("Frontend files are missing. Run from the project folder or use --static DIRECTORY.");
-        const auto desk_key = env("RESERVATION_DESK_KEY", random_key());
+        const auto desk_key = journey::resolve_desk_key(storage, env("RESERVATION_DESK_KEY"));
         journey::WebApplication application(storage, static_root, desk_key);
         auto& server = application.server();
         bool bound = false;

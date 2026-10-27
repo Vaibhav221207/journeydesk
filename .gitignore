@@ -2,3 +2,5 @@
 /data/
 *.tmp
 *.log
+desk.key
+.env

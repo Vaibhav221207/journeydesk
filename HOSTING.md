@@ -10,6 +10,10 @@ The service was configured through the official Render CLI and API. Updates depl
 
 The service listens on `0.0.0.0` using `PORT`. Configure `RESERVATION_PUBLIC_HOST` as the exact public hostname, `journeydesk.onrender.com`, without a scheme or path. The app's hostname allowlist also applies to the HTTP health check at `/api/health`. If the assigned hostname changes, update this setting before redeploying. A start wrapper can obtain Render's assigned hostname from `RENDER_EXTERNAL_HOSTNAME` at runtime.
 
+The hosted desk key is stored privately in Render's `RESERVATION_DESK_KEY` environment setting and stays the same across service restarts and deployments. Its value is not included in source or the submission ZIP. Without that environment override, local startup creates `desk.key` beside the selected booking data file once and reuses it; with `start.bat`, this is `data/desk.key`. Invalid existing key files cause startup to fail rather than silently replacing the key. The default key is private to each installation; the current D-drive copy is configured separately to match this hosted installation.
+
+Custom keys must contain 12–256 ASCII letters, digits, dots, underscores, tildes or hyphens. This alphabet survives browser and HTTP header handling unchanged. A manually created key file may have one final LF or CRLF line ending; on Linux it must be readable by its owner and have no group/other permissions (`chmod 600 data/desk.key`).
+
 **This deployment is a temporary demo, not durable booking storage.** The current JSON file is `/app/data/bookings.json` inside the container. Render's free service uses an ephemeral filesystem: restarting, redeploying or spinning down deletes local booking changes. Free services sleep after 15 minutes without inbound traffic and usually take about one minute to wake on the next request. A persistent disk requires a paid service; adding an external datastore would require changes to this app. No persistent disk or external datastore is configured for the free demo.
 
 Official references: [Docker deployment](https://render.com/docs/docker), [health checks](https://render.com/docs/health-checks), [free service limits](https://render.com/docs/free).
@@ -35,7 +39,7 @@ Compiler must support C++20 calendar facilities. If the host's `cmake` is unavai
 
 ```sh
 mkdir -p build
-g++ -std=c++20 -O1 -pthread -Iinclude -Ivendor src/engine.cpp src/web.cpp src/main.cpp -o build/journeydesk
+g++ -std=c++20 -O1 -pthread -Iinclude -Ivendor src/engine.cpp src/web.cpp src/desk_key.cpp src/main.cpp -o build/journeydesk
 ```
 
 Configure the native server command for the hosting platform:

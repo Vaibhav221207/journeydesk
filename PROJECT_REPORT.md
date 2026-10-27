@@ -112,6 +112,7 @@ Complete application operations include validation, record lookup, candidate dee
 - A mutex serializes operations in one server process. Candidate copies ensure failed writes leave live state unchanged.
 - Atomic file replacement publishes complete snapshots. Corrupt storage is rejected and preserved for recovery.
 - Public availability responses contain no passenger identities. Individual ticket lookup uses reference/contact; the manifest requires a desk key, except for clearly labelled fictional demo records.
+- The desk key is configured through `RESERVATION_DESK_KEY` or generated once into a private `desk.key` file beside the local booking data. Restarting reuses the key. Key files are excluded from version control, Docker build context and submission archives.
 
 ## Viva questions
 

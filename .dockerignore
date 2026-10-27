@@ -3,3 +3,6 @@ bin/
 data/
 *.zip
 .git/
+**/desk.key
+desk.key
+.env

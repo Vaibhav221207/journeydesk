@@ -15,7 +15,7 @@ This is a **temporary classroom demo** on Render's free web service plan. It sle
 3. The C++ server opens `http://127.0.0.1:8080/` in your browser. Keep its terminal open while using the project.
 4. Press Ctrl+C in that terminal to stop the server.
 
-The submission ZIP includes `bin/journeydesk.exe`, which runs without installing Python, Node.js or a compiler. The GitHub repository contains source only; build it using the instructions below. The **desk access key** appears in the server terminal. Use it to open the normal passenger manifest. The fictional demo is accessible without that key.
+The submission ZIP includes `bin/journeydesk.exe`, which runs without installing Python, Node.js or a compiler. The GitHub repository contains source only; build it using the instructions below. The **desk access key** appears in the server terminal. Local startup creates `data/desk.key` once and reuses it after restarts. Preserve that private file to keep the same key. `RESERVATION_DESK_KEY` takes precedence when configured. Use the key to open the normal passenger manifest; the fictional demo is accessible without it.
 
 If port 8080 is occupied, run from the project folder:
 
@@ -72,6 +72,7 @@ Passenger manifests and cancellation controls are separated from the public seat
 | `include/engine.hpp`, `src/engine.cpp` | Booking rules, catalogue, validation, search, persistence |
 | `include/web.hpp`, `src/web.cpp` | HTTP routes, request validation, protected desk, static allowlist |
 | `src/main.cpp` | Native executable entry point and command-line options |
+| `include/desk_key.hpp`, `src/desk_key.cpp` | Persistent local desk key and environment override |
 | `static/` | Browser interface and original SVG illustration |
 | `tests/` | C++ behavioral and HTTP integration tests |
 | `bin/journeydesk.exe` | Portable Windows build |
