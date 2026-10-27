@@ -31,6 +31,7 @@ AppError::AppError(std::string message, int code, json details)
     : std::runtime_error(std::move(message)), status(code), fields(std::move(details)) {}
 namespace {
 using Day = std::chrono::sys_days;
+constexpr std::size_t max_group_passengers=6;
 std::string trim(std::string value) {
     const auto first=value.find_first_not_of(" \t\r\n");
     if(first==std::string::npos)return {};
@@ -328,7 +329,7 @@ ReservationEngine::ReservationEngine(std::filesystem::path storage_path,std::str
 ReservationEngine::~ReservationEngine()=default;
 json ReservationEngine::catalog() const {
     const std::lock_guard guard(impl_->mutex);const auto today=impl_->today();
-    return {{"cities",{"Ahmedabad","Mumbai","Surat","Pune"}},{"services",impl_->services},{"today",date_string(today)},{"default_date",date_string(today+std::chrono::days{1})},{"max_date",date_string(today+std::chrono::days{365})},{"demo_service","GJ01"},{"demo_date",impl_->state.demo_date},{"backend","C++20"}};
+    return {{"cities",{"Ahmedabad","Mumbai","Surat","Pune"}},{"services",impl_->services},{"today",date_string(today)},{"default_date",date_string(today+std::chrono::days{1})},{"max_date",date_string(today+std::chrono::days{365})},{"demo_service","GJ01"},{"demo_date",impl_->state.demo_date},{"backend","C++20"},{"max_passengers_per_booking",max_group_passengers}};
 }
 json ReservationEngine::search(const json& input) const {
     const std::lock_guard guard(impl_->mutex);object(input);
@@ -377,6 +378,96 @@ json ReservationEngine::book(const json& input) {
     j.records.push_back(b);
     const auto response=json{{"message",b.status=="Confirmed"?"Your seat is confirmed.":"Added to the waiting queue."},{"ticket",impl_->ticket_json(j,b)},{"journey",impl_->public_journey(j)}};
     impl_->commit(std::move(candidate));return response;
+}
+json ReservationEngine::book_group(const json& input) {
+    const std::lock_guard guard(impl_->mutex);object(input);
+    const std::set<std::string> request_fields{"service_id","date","demo","contact","passengers"};
+    for(auto field=input.begin();field!=input.end();++field)
+        if(!request_fields.count(field.key()))invalid(field.key(),"This field is not supported for group bookings.");
+    const auto selection=impl_->select(input,true);
+    const auto shared_contact=contact(text(input,"contact"));
+    if(!input.contains("passengers") || !input["passengers"].is_array() || input["passengers"].empty() || input["passengers"].size()>max_group_passengers)
+        invalid("passengers","Enter between 1 and 6 passengers for one booking.");
+
+    struct Member {Booking booking;int preferred=0;};
+    std::vector<Member> members;
+    members.reserve(input["passengers"].size());
+    std::set<std::string> names;
+    std::set<int> preferences;
+    const std::set<std::string> passenger_fields{"name","age","gender","seat_number"};
+    for(std::size_t index=0;index<input["passengers"].size();++index) {
+        const auto path="passengers."+std::to_string(index);
+        const auto& passenger=input["passengers"][index];
+        if(!passenger.is_object())invalid(path,"Enter valid passenger details.");
+        for(auto field=passenger.begin();field!=passenger.end();++field)
+            if(!passenger_fields.count(field.key()))invalid(path+"."+field.key(),"This passenger field is not supported. Use the shared contact number.");
+        Member member;
+        try {
+            member.booking.name=passenger_name(text(passenger,"name"));
+            member.booking.age=integer(passenger,"age",1,120);
+            member.booking.gender=gender(text(passenger,"gender"));
+            member.booking.contact=shared_contact;
+            if(passenger.contains("seat_number") && !passenger["seat_number"].is_null())
+                member.preferred=integer(passenger,"seat_number",1,selection.capacity);
+        } catch(const AppError& error) {
+            json fields=json::object();
+            for(auto field=error.fields.begin();field!=error.fields.end();++field)
+                fields[path+"."+field.key()]=field.value();
+            if(fields.empty())fields[path]=error.what();
+            throw AppError(error.what(),error.status,std::move(fields));
+        }
+        if(!names.insert(lower(member.booking.name)).second)
+            throw AppError("Each passenger must have a distinct name for the shared contact number.",409,{{path+".name","This passenger is already included in the booking."}});
+        if(member.preferred && !preferences.insert(member.preferred).second)
+            throw AppError("Two passengers cannot choose the same seat.",409,{{path+".seat_number","This seat is already selected by another passenger."}});
+        members.push_back(std::move(member));
+    }
+
+    // Work on a deep copy only after every member has passed basic validation.
+    // Any conflict or failed save discards all tentative seats, records and IDs.
+    State candidate=impl_->state;
+    auto& j=impl_->ensure(candidate,selection);
+    for(std::size_t index=0;index<members.size();++index) {
+        const auto path="passengers."+std::to_string(index);
+        const auto& member=members[index];
+        if(j.records.find([&](const Booking& other){return other.status!="Cancelled" && lower(other.name)==lower(member.booking.name) && other.contact==shared_contact;}))
+            throw AppError("A passenger already has an active reservation for this journey.",409,{{path+".name","This passenger already has an active reservation for this journey."}});
+        if(member.preferred && !j.seats[member.preferred-1].empty())
+            throw AppError("A selected seat has already been booked. Choose another seat.",409,{{path+".seat_number","Seat is already booked."}});
+    }
+    if(candidate.next_id>=std::numeric_limits<std::uint64_t>::max()-members.size())
+        throw AppError("Passenger identifiers are temporarily unavailable.",503);
+
+    // Reserve every manual choice before any automatic passenger takes a seat.
+    // The remaining heap then supplies the lowest unreserved seats to autos.
+    for(const auto& member:members)if(member.preferred)j.free_seats.remove(member.preferred);
+    int confirmed=0;
+    for(auto& member:members) {
+        auto& b=member.booking;
+        b.reference=random_token();
+        std::ostringstream id;
+        id<<'P'<<std::setw(6)<<std::setfill('0')<<candidate.next_id++;
+        b.id=id.str();
+        if(member.preferred || !j.free_seats.empty()) {
+            b.seat=member.preferred?member.preferred:j.free_seats.pop();
+            b.status="Confirmed";
+            j.seats[b.seat-1]=b.reference;
+            ++confirmed;
+        } else {
+            b.status="Waiting";
+            j.waiting.push(b.reference);
+        }
+        j.records.push_back(b);
+    }
+    json tickets=json::array();
+    for(const auto& member:members)tickets.push_back(impl_->ticket_json(j,member.booking));
+    const int waiting=static_cast<int>(members.size())-confirmed;
+    const auto message=std::to_string(confirmed)+" passenger(s) confirmed; "+std::to_string(waiting)+" added to the waiting queue.";
+    const auto response=json{{"message",message},{"tickets",tickets},{"journey",impl_->public_journey(j)},
+        {"total_fare",impl_->service(j.service_id)["fare"].get<int>()*static_cast<int>(members.size())},
+        {"counts",{{"confirmed",confirmed},{"waiting",waiting}}}};
+    impl_->commit(std::move(candidate));
+    return response;
 }
 json ReservationEngine::ticket(const json& input) const {
     const std::lock_guard guard(impl_->mutex);object(input);std::string reference,number;

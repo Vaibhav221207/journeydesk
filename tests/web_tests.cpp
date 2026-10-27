@@ -178,6 +178,66 @@ int main() {
         auto r = server.post("/api/desk/cancel", body, 200, {{"X-Desk-Key", "test-desk-key-2026"}});
         require(r.at("cancelled").at("status") == "Cancelled", "authorized cancellation failed");
     });
+    test("group HTTP booking returns independent tickets and honors later preferred seats", [&] {
+        const json group = {{"service_id", "GJ04"}, {"date", "2026-11-02"}, {"contact", "+91 90000 00301"},
+            {"passengers", json::array({
+                {{"name", "Group First"}, {"age", 31}, {"gender", "Female"}},
+                {{"name", "Group Second"}, {"age", 29}, {"gender", "Male"}, {"seat_number", 1}}
+            })}};
+        const auto result = server.post("/api/book/group", group);
+        require(result.at("tickets").size() == 2 && result.at("counts") == json({{"confirmed", 2}, {"waiting", 0}}), "group receipt missing or counts wrong");
+        require(result.at("total_fare") == 900, "group total fare incorrect");
+        const auto& first = result.at("tickets").at(0);
+        const auto& second = result.at("tickets").at(1);
+        require(first.at("seat_number") == 2 && second.at("seat_number") == 1, "automatic allocation took a later explicit seat");
+        require(first.at("reference") != second.at("reference") && first.at("passenger_id") != second.at("passenger_id"), "group tickets share an identity");
+        require(first.at("contact") == "919000000301" && second.at("contact") == first.at("contact"), "shared contact was not normalized");
+        server.post("/api/ticket", {{"reference", first.at("reference")}, {"contact", "9000000999"}}, 404);
+        server.post("/api/cancel", {{"reference", first.at("reference")}, {"contact", "+91 90000 00301"}});
+        const auto other = server.post("/api/ticket", {{"reference", second.at("reference")}, {"contact", "+91 90000 00301"}});
+        require(other.at("ticket").at("status") == "Confirmed" && other.at("ticket").at("seat_number") == 1, "individual cancellation affected another passenger");
+    });
+    test("group HTTP validation reports indexed errors without partial booking", [&] {
+        json group = {{"service_id", "GJ04"}, {"date", "2026-11-03"}, {"contact", "9000000302"},
+            {"passengers", json::array({
+                {{"name", "Valid Group Member"}, {"age", 20}, {"gender", "Other"}},
+                {{"name", "Invalid Group Member"}, {"age", 0}, {"gender", "Other"}}
+            })}};
+        const auto invalid = server.post("/api/book/group", group, 400);
+        require(invalid.at("fields").contains("passengers.1.age"), "indexed passenger validation missing");
+        const auto journey = server.client.Get("/api/journey?service_id=GJ04&date=2026-11-03");
+        require(journey && json::parse(journey->body).at("counts").at("booked") == 0, "invalid group partially booked");
+        group["passengers"][1]["age"] = 21;
+        server.post("/api/book/group", group, 403, {{"Origin", "https://evil.invalid"}});
+        group["_desk_authorized"] = true;
+        server.post("/api/book/group", group, 400);
+        group.erase("_desk_authorized");
+        group["passengers"] = json::array();
+        for (int i = 0; i < 7; ++i) group["passengers"].push_back({{"name", "Member " + std::to_string(i)}, {"age", 20}, {"gender", "Other"}});
+        require(server.post("/api/book/group", group, 400).at("fields").contains("passengers"), "group size bound missing");
+    });
+    test("group HTTP overflow joins FIFO and individual cancellation promotes exact seat", [&] {
+        for (int i = 0; i < 10; ++i) server.post("/api/book", {
+            {"service_id", "GJ04"}, {"date", "2026-11-04"},
+            {"passenger", {{"name", "Existing Traveller " + std::to_string(i)}, {"age", 25}, {"gender", "Other"}, {"contact", "9000000303"}}}
+        });
+        const auto result = server.post("/api/book/group", {
+            {"service_id", "GJ04"}, {"date", "2026-11-04"}, {"contact", "9000000304"},
+            {"passengers", json::array({
+                {{"name", "First Group Traveller"}, {"age", 20}, {"gender", "Other"}},
+                {{"name", "Second Group Traveller"}, {"age", 21}, {"gender", "Other"}, {"seat_number", 11}},
+                {{"name", "Third Group Traveller"}, {"age", 22}, {"gender", "Other"}}
+            })}
+        });
+        require(result.at("counts") == json({{"confirmed", 2}, {"waiting", 1}}), "partial availability was not clearly reported");
+        require(result.at("tickets").at(0).at("seat_number") == 12 && result.at("tickets").at(1).at("seat_number") == 11, "explicit group preference lost");
+        const auto& waiting = result.at("tickets").at(2);
+        require(waiting.at("status") == "Waiting" && waiting.at("queue_position") == 1, "overflow passenger did not enter FIFO");
+        const auto cancelled = server.post("/api/cancel", {{"reference", result.at("tickets").at(1).at("reference")}, {"contact", "9000000304"}});
+        require(cancelled.at("promoted") == json({{"seat_number", 11}}), "normal promotion leaked identity or assigned wrong seat");
+        const auto promoted = server.post("/api/ticket", {{"reference", waiting.at("reference")}, {"contact", "9000000304"}});
+        require(promoted.at("ticket").at("status") == "Confirmed" && promoted.at("ticket").at("seat_number") == 11, "waiting group ticket did not become confirmed");
+    });
     std::cout << passed << " passed, " << failed << " failed\n";
     return failed ? 1 : 0;
 }

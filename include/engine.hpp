@@ -23,6 +23,7 @@ public:
     json search(const json& input) const;
     json journey(const json& input) const;
     json book(const json& input);
+    json book_group(const json& input);
     json ticket(const json& input) const;
     json cancel(const json& input);
     json manifest(const json& input) const;

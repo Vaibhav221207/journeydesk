@@ -28,8 +28,9 @@ Normal journeys start with **no passengers**. Bookings are saved in `data/bookin
 ## What to demonstrate
 
 - Choose Bus or Train, departure city, destination city and travel date. Search the sample timetable, select a service and check its availability.
-- Enter a traveller's name, contact, age and gender. Choose an available seat or automatic allocation. Review the details and confirm.
-- Keep the generated booking reference. Find a ticket using its reference and the same contact number; confirmed, waiting and cancelled tickets remain searchable.
+- Enter one shared contact number and the first traveller's name, age and gender. Use **Add traveller** for up to six people. Choose an available seat or automatic allocation for each person, review everyone together, then confirm once.
+- If there are fewer seats than travellers, available allocations are confirmed and the remaining people join the waiting queue in order. The review and combined receipt distinguish each person's seat or waiting position.
+- Keep each traveller's generated booking reference, or print the combined ticket list. Find or cancel an individual ticket using its reference and the shared contact number; confirmed, waiting and cancelled tickets remain searchable.
 - Cancel a ticket. When the journey is full, its seat goes directly to the first waiting passenger. Otherwise the seat becomes available.
 - Open **Demo** and load its fictional sample. Seat 2 belongs to P102 Priya Patel; cancelling it assigns that exact seat to P108 Neha Patel. P109 Raj Kumar and P110 Amit Patel then move forward in the queue.
 - Open **Reservation desk** for the passenger list, ID/name/reference search, and waiting queue. A demo reset affects only fictional demo records.
@@ -59,7 +60,7 @@ For very limited build memory, reduce parallelism to one. JavaScript syntax can 
 
 ## Scope
 
-Schedules, fares and availability belong to this project. They are fictional and are **not connected to IRCTC or an actual bus operator**. Ahmedabad, Mumbai, Surat and Pune each have direct bus and train options to every other listed city, in both directions. The catalogue contains 25 services across 24 route-and-transport combinations, including two Ahmedabad–Mumbai buses. One traveller is booked per reservation. There is no payment, SMS or real train tracking integration.
+Schedules, fares and availability belong to this project. They are fictional and are **not connected to IRCTC or an actual bus operator**. Ahmedabad, Mumbai, Surat and Pune each have direct bus and train options to every other listed city, in both directions. The catalogue contains 25 services across 24 route-and-transport combinations, including two Ahmedabad–Mumbai buses. Up to six travellers can be submitted together, with an individual ticket for each person. There is no payment, SMS or real train tracking integration.
 
 Passenger manifests and cancellation controls are separated from the public seat map. The public map shows only whether a seat is available. Individual ticket lookup requires the booking reference and contact number. The normal desk requires its private access key. Use fictional personal details for classroom demonstrations.
 

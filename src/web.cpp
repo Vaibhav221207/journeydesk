@@ -198,6 +198,7 @@ struct WebApplication::Impl {
             respond(res, engine.manifest(input));
         });
         server.Post("/api/book", [this](const auto& req, auto& res) { respond(res, engine.book(body_input(req))); });
+        server.Post("/api/book/group", [this](const auto& req, auto& res) { respond(res, engine.book_group(body_input(req))); });
         server.Post("/api/ticket", [this](const auto& req, auto& res) { respond(res, engine.ticket(body_input(req))); });
         server.Post("/api/cancel", [this](const auto& req, auto& res) { respond(res, engine.cancel(body_input(req))); });
         server.Post("/api/demo", [this](const auto& req, auto& res) { respond(res, engine.load_demo(body_input(req))); });

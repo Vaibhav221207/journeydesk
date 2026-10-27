@@ -18,13 +18,13 @@ Journey Desk manages passenger reservations, seat availability, cancellations, p
 | Display passenger list | Separate desk manifest, ordered by confirmed seat |
 | Maintain a waiting queue | Full journeys enqueue new reservations; queue positions update after cancellation/promotion |
 
-The revised interface also supports route/date search, sample service times and fares, booking review, ticket lookup and printing. Regular journeys begin empty. Loading fictional sample records is an explicit demo action.
+The revised interface also supports route/date search, sample service times and fares, group booking for one to six travellers, combined review, individual ticket lookup/cancellation, and printing all tickets together. Regular journeys begin empty. Loading fictional sample records is an explicit demo action.
 
 ## Input and output
 
 Passenger input: full name, age, gender and contact number. The backend generates a passenger ID and a random booking reference, which prevents users having to invent unique IDs. Journey input: transport mode, source, destination, date, chosen service and an optional preferred seat.
 
-Output: service details, fare, confirmed seat or waiting position, passenger ID and booking reference. Ticket lookup displays the current status, including cancellation. The reservation desk displays the assignment's manifest and waiting list.
+Groups enter one shared contact number and a name, age, gender and optional seat preference for each traveller. Output includes service details, total sample fare and each person's confirmed seat or waiting position, passenger ID and booking reference. Ticket lookup displays the current status, including cancellation. The reservation desk displays the assignment's manifest and waiting list.
 
 ## Data structures
 
@@ -55,6 +55,15 @@ Booking:
 5. Append the passenger record to the linked list.
 6. Save the candidate atomically, then publish it as live state.
 7. Return the ticket and current public seat map.
+
+Group booking:
+
+1. Validate one to six passenger entries and the shared contact number. Reject duplicate active names/contact pairs, repeated seat preferences and already occupied preferred seats.
+2. Copy the live state once. Remove every selected preferred seat from the candidate min-heap before allocating automatic seats, so automatic allocation cannot take another group member's choice.
+3. In passenger order, assign each reserved preference or pop the lowest remaining free seat. If no seat remains, append that passenger's reference to the FIFO queue.
+4. Append an ordinary linked-list record with a separate passenger ID and ticket reference for each traveller.
+5. Save the entire candidate once, then publish it. Any validation, conflict or write error leaves all original records, seats and ID counters unchanged.
+6. Return the combined receipt and total sample fare. Each ticket can subsequently be looked up or cancelled independently with the shared contact.
 
 Cancellation:
 
@@ -126,4 +135,4 @@ Complete application operations include validation, record lookup, candidate dee
 
 ## Limits
 
-This is a single-process educational application with one passenger per reservation, fixed capacities and a small direct-service catalogue. It has no payment/refund processing, multi-server database, intermediate route occupancy, SMS, account login, railway quotas or real transport integration. Native hosting requirements and filesystem persistence are described in `HOSTING.md`.
+This is a single-process educational application with up to six travellers per submission, individual tickets, fixed capacities and a small direct-service catalogue. It has no payment/refund processing, multi-server database, intermediate route occupancy, SMS, account login, railway quotas or real transport integration. Native hosting requirements and filesystem persistence are described in `HOSTING.md`.

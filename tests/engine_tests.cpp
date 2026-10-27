@@ -5,6 +5,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <vector>
@@ -33,6 +34,18 @@ json booking(std::string name = "Ada Patel", std::string contact = "9876543210",
 }
 json auth(const json& t) { return {{"reference",t.at("reference")},{"contact",t.at("contact")}}; }
 json desk(json k = key()) { k["_desk_authorized"] = true; return k; }
+json group(std::initializer_list<std::string> names={"Ada Patel","Ben Shah"},std::string number="9876543210",std::string service="GJ01") {
+    auto request=key(service);request["contact"]=number;request["passengers"]=json::array();
+    for(const auto& name:names)request["passengers"].push_back({{"name",name},{"age",25},{"gender","Other"},{"seat_number",nullptr}});
+    return request;
+}
+void field_error(int status,const std::string& field,const std::function<void()>& body) {
+    try {body();}catch(const journey::AppError& e) {
+        require(e.status==status,"wrong indexed error status: "+std::to_string(e.status));
+        require(e.fields.is_object() && e.fields.contains(field),"expected error field "+field+", got "+e.fields.dump());return;
+    }
+    throw std::runtime_error("expected indexed AppError for "+field);
+}
 struct Temp {
     fs::path dir;
     Temp() { static std::atomic<int> n{0}; dir = fs::temp_directory_path() / ("journeydesk-engine-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" + std::to_string(n++)); fs::create_directories(dir); }
@@ -317,6 +330,159 @@ int main() {
         auto m=e.manifest(desk()); require(errors==0 && m["passengers"].size()==12 && m["waiting"].size()==18,"concurrent record loss");
         std::set<int> seats;std::set<std::string> refs;for(const auto& t:m["passengers"]){seats.insert(t["seat_number"].get<int>());refs.insert(t["reference"].get<std::string>());}for(const auto& t:m["waiting"])refs.insert(t["reference"].get<std::string>());
         require(seats.size()==12 && refs.size()==30,"duplicate seats/references");
+    });
+    // Break caught: browser limits must reflect the enforced group boundary.
+    test("catalog advertises six passengers per booking", [] {
+        ReservationEngine e({},"2026-10-27");require(e.catalog().value("max_passengers_per_booking",0)==6,"missing group size limit");
+    });
+    // Break caught: shared contact, generated identities, ticket order and aggregate fare must agree.
+    test("group issues independent tickets in passenger order with shared normalized contact", [] {
+        ReservationEngine e({},"2026-10-27");auto response=e.book_group(group({"  Ada Patel  ","Ben Shah","Clara Desai"},"+91 (98765) 43210"));
+        require(response["counts"]==json({{"confirmed",3},{"waiting",0}}) && response["total_fare"]==2550,"wrong group counts or fare");
+        require(response["tickets"].size()==3 && response["journey"]["counts"]["booked"]==3,"group records missing");
+        const std::vector<std::string> names{"Ada Patel","Ben Shah","Clara Desai"};std::set<std::string> refs;
+        for(std::size_t i=0;i<names.size();++i) {
+            const auto& ticket=response["tickets"][i];require(ticket["name"]==names[i] && ticket["contact"]=="919876543210" && ticket["seat_number"]==static_cast<int>(i)+1,"group ticket changed input order, contact or seat");
+            require(ticket["passenger_id"]==("P00000"+std::to_string(i+1)) && ticket["status"]=="Confirmed" && ticket["queue_position"].is_null() && ticket["fare"]==850,"group identity/status contract");
+            const auto ref=ticket["reference"].get<std::string>();require(ref.starts_with("JD-") && ref.size()==67 && refs.insert(ref).second,"group references must be independent and unguessable");
+            require(e.ticket(auth(ticket))["ticket"]==ticket,"group member cannot be looked up independently");
+            error(404,[&]{e.ticket({{"reference",ref},{"contact","1234567890"}});});
+        }
+        e.cancel(auth(response["tickets"][1]));
+        require(e.ticket(auth(response["tickets"][0]))["ticket"]["status"]=="Confirmed" && e.journey(key())["counts"]["booked"]==2,"one member cancellation affected their companions");
+    });
+    // Break caught: invalid final details must never leave earlier group passengers booked.
+    test("invalid last group passenger rolls back all seats and IDs with indexed fields", [] {
+        ReservationEngine e({},"2026-10-27");
+        const std::vector<std::pair<std::string,json>> bad_values{{"name","  "},{"name",std::string(101,'A')},{"age",0},{"age",121},{"age",25.5},{"age",true},{"gender","Unknown"},{"seat_number",13},{"seat_number",true},{"seat_number",2.5}};
+        for(const auto& [field,value]:bad_values) {
+            auto request=group({"Valid One","Valid Two","Invalid Last"});request["passengers"][2][field]=value;
+            field_error(400,"passengers.2."+field,[&]{e.book_group(request);});
+            require(e.journey(key())["counts"]["booked"]==0,"invalid last member partially booked group");
+        }
+        auto missing=group();missing["passengers"][1].erase("name");field_error(400,"passengers.1.name",[&]{e.book_group(missing);});
+        auto non_object=group();non_object["passengers"][1]="invalid";field_error(400,"passengers.1",[&]{e.book_group(non_object);});
+        require(e.book(booking())["ticket"]["passenger_id"]=="P000001","invalid group consumed IDs");
+    });
+    // Break caught: duplicates inside a group must use the same normalized active-passenger rule as existing records.
+    test("duplicate group passenger names reject the entire request", [] {
+        ReservationEngine e({},"2026-10-27");
+        field_error(409,"passengers.1.name",[&]{e.book_group(group({" Ada Patel ","ada patel"}));});
+        require(e.journey(key())["counts"]["booked"]==0,"duplicate group partially booked");
+        require(e.book(booking())["ticket"]["passenger_id"]=="P000001","duplicate group consumed IDs");
+    });
+    test("existing active passenger conflict rolls back new group companions", [] {
+        ReservationEngine e({},"2026-10-27");auto prior=e.book(booking("Ada Patel","919876543210"))["ticket"];
+        field_error(409,"passengers.1.name",[&]{e.book_group(group({"New Companion"," ada patel "},"+91 (98765) 43210"));});
+        require(e.manifest(desk())["passengers"].size()==1 && e.ticket(auth(prior))["ticket"]["status"]=="Confirmed","active duplicate conflict mutated group");
+        e.cancel(auth(prior));auto accepted=e.book_group(group({"New Companion","Ada Patel"},"919876543210"));
+        require(accepted["tickets"][0]["passenger_id"]=="P000002" && accepted["counts"]["confirmed"]==2,"cancelled history prevented group rebooking or rollback consumed IDs");
+    });
+    // Break caught: allocating autos before reserving every preference steals a later passenger's seat.
+    test("group reserves later manual seat choices before allocating automatic seats", [] {
+        ReservationEngine e({},"2026-10-27");auto request=group({"Auto First","Manual Second","Auto Third","Manual Last"});
+        request["passengers"][1]["seat_number"]=1;request["passengers"][3]["seat_number"]=3;auto response=e.book_group(request);
+        require(response["tickets"][0]["seat_number"]==2 && response["tickets"][1]["seat_number"]==1 && response["tickets"][2]["seat_number"]==4 && response["tickets"][3]["seat_number"]==3,"automatic allocation stole a later explicit preference");
+        require(e.book(booking("Later Traveller"))["ticket"]["seat_number"]==5,"group heap reservation lost remaining minimum");
+    });
+    test("duplicate manual group seat rejects all records and seat changes", [] {
+        ReservationEngine e({},"2026-10-27");auto request=group({"Auto","Manual One","Manual Two"});request["passengers"][1]["seat_number"]=5;request["passengers"][2]["seat_number"]=5;
+        field_error(409,"passengers.2.seat_number",[&]{e.book_group(request);});
+        require(e.journey(key())["counts"]["booked"]==0 && e.book(booking())["ticket"]["passenger_id"]=="P000001","duplicate seat partially booked group");
+    });
+    test("occupied manual group seat rejects earlier automatic members atomically", [] {
+        ReservationEngine e({},"2026-10-27");auto prior=booking("Prior Traveller");prior["seat_number"]=7;e.book(prior);
+        auto request=group({"Auto First","Manual Last"});request["passengers"][1]["seat_number"]=7;
+        field_error(409,"passengers.1.seat_number",[&]{e.book_group(request);});
+        auto next=e.book(booking("Next Traveller"))["ticket"];require(next["seat_number"]==1 && next["passenger_id"]=="P000002" && e.journey(key())["counts"]["booked"]==2,"occupied preference left partial group state");
+    });
+    // Break caught: partial availability must confirm only available seats and preserve overflow order for promotion.
+    test("partly available group confirms seats and queues remaining members FIFO", [] {
+        ReservationEngine e({},"2026-10-27");json first;
+        for(int i=0;i<10;++i){auto ticket=e.book(booking("Existing "+std::to_string(i)))["ticket"];if(i==0)first=ticket;}
+        auto response=e.book_group(group({"Group A","Group B","Group C","Group D"}));
+        require(response["counts"]==json({{"confirmed",2},{"waiting",2}}) && response["total_fare"]==3400,"partial group aggregate incorrect");
+        require(response["tickets"][0]["seat_number"]==11 && response["tickets"][1]["seat_number"]==12 && response["tickets"][2]["status"]=="Waiting" && response["tickets"][2]["queue_position"]==1 && response["tickets"][3]["queue_position"]==2,"partial group did not preserve FIFO input order");
+        require(response["tickets"][2]["seat_number"].is_null() && response["tickets"][3]["seat_number"].is_null(),"waiting group members have seats");
+        auto cancelled=e.cancel(auth(first));require(cancelled["promoted"]==json({{"seat_number",1}}),"group promotion leaked identity or lost exact seat");
+        require(e.ticket(auth(response["tickets"][2]))["ticket"]["seat_number"]==1 && e.ticket(auth(response["tickets"][3]))["ticket"]["queue_position"]==1,"group FIFO promotion is wrong");
+    });
+    test("fully booked group joins behind existing FIFO and waiting cancellation releases no seat", [] {
+        ReservationEngine e({},"2026-10-27");for(int i=0;i<13;++i)e.book(booking("Existing "+std::to_string(i)));
+        auto response=e.book_group(group({"Waiting A","Waiting B"}));require(response["counts"]==json({{"confirmed",0},{"waiting",2}}) && response["tickets"][0]["queue_position"]==2 && response["tickets"][1]["queue_position"]==3,"group jumped existing queue");
+        auto cancelled=e.cancel(auth(response["tickets"][0]));require(cancelled["promoted"].is_null() && cancelled["journey"]["counts"]["booked"]==12 && e.ticket(auth(response["tickets"][1]))["ticket"]["queue_position"]==2,"waiting group cancellation changed seats or FIFO");
+    });
+    // Break caught: a later reserved preference must confirm even when earlier autos exhaust the unreserved pool.
+    test("last explicit group preference remains confirmed when earlier members overflow", [] {
+        ReservationEngine e({},"2026-10-27");for(int i=0;i<11;++i)e.book(booking("Existing "+std::to_string(i)));
+        auto request=group({"Auto A","Auto B","Preferred Last"});request["passengers"][2]["seat_number"]=12;auto response=e.book_group(request);
+        require(response["counts"]==json({{"confirmed",1},{"waiting",2}}) && response["tickets"][0]["queue_position"]==1 && response["tickets"][1]["queue_position"]==2 && response["tickets"][2]["seat_number"]==12,"explicit reservation lost when autos overflowed");
+    });
+    test("group enforces one to six members and accepts both boundaries", [] {
+        ReservationEngine e({},"2026-10-27");auto empty=group();empty["passengers"]=json::array();field_error(400,"passengers",[&]{e.book_group(empty);});
+        auto too_many=group({"A","B","C","D","E","F","G"});field_error(400,"passengers",[&]{e.book_group(too_many);});
+        auto wrong=group();wrong["passengers"]=json::object();field_error(400,"passengers",[&]{e.book_group(wrong);});
+        wrong=group();wrong.erase("passengers");field_error(400,"passengers",[&]{e.book_group(wrong);});
+        auto one=e.book_group(group({"Single"}));auto six=e.book_group(group({"A","B","C","D","E","F"}));
+        require(one["tickets"].size()==1 && one["tickets"][0]["passenger_id"]=="P000001" && six["tickets"].size()==6 && e.journey(key())["counts"]["booked"]==7,"valid group size boundary failed");
+    });
+    test("group validates shared contact and rejects internal or nested override fields", [] {
+        ReservationEngine e({},"2026-10-27");auto request=group();request["contact"]="abc9876543210";field_error(400,"contact",[&]{e.book_group(request);});
+        request=group();request["_desk_authorized"]=true;error(400,[&]{e.book_group(request);});
+        request=group();request["passengers"][1]["contact"]="1234567890";field_error(400,"passengers.1.contact",[&]{e.book_group(request);});
+        request=group();request["passengers"][1]["_desk_authorized"]=true;field_error(400,"passengers.1._desk_authorized",[&]{e.book_group(request);});
+        request=group();request["passengers"][1]["unexpected"]=true;field_error(400,"passengers.1.unexpected",[&]{e.book_group(request);});
+        request=group();request["date"]="2026-10-26";field_error(400,"date",[&]{e.book_group(request);});
+        require(e.journey(key())["counts"]["booked"]==0,"invalid group request mutated state");
+    });
+    test("group honors train capacity fare and service date isolation", [] {
+        ReservationEngine e({},"2026-10-27");auto request=group({"Train A","Train B"},"9876543210","GJ02");request["passengers"][1]["seat_number"]=18;
+        auto response=e.book_group(request);require(response["tickets"][0]["seat_number"]==1 && response["tickets"][1]["seat_number"]==18 && response["total_fare"]==1240 && response["journey"]["counts"]["available"]==16,"train group used bus capacity or fare");
+        require(e.journey(key())["counts"]["booked"]==0 && e.journey(key("GJ02","2026-10-29"))["counts"]["booked"]==0,"group leaked across service or date");
+    });
+    test("group demo bookings remain isolated and use the restricted sample namespace", [] {
+        ReservationEngine e({},"2026-10-27");e.load_demo(json::object());auto request=group({"Demo A","Demo B"});request["demo"]=true;
+        auto response=e.book_group(request);require(response["counts"]==json({{"confirmed",0},{"waiting",2}}) && response["tickets"][0]["demo"]==true && response["tickets"][0]["queue_position"]==4 && response["tickets"][1]["queue_position"]==5,"demo group lost existing FIFO or namespace");
+        require(e.journey(key())["counts"]["booked"]==0,"demo group mutated normal journey");
+        request["date"]="2026-10-29";field_error(400,"demo",[&]{e.book_group(request);});
+        request["date"]="2026-10-28";request["service_id"]="GJ02";field_error(400,"demo",[&]{e.book_group(request);});
+    });
+    // Break caught: one failed disk replacement must roll back every member and generated identifier.
+    test("failed group save rolls back all seats records and IDs", [] {
+        Temp tmp;const auto path=tmp.dir/"state.json";ReservationEngine e(path,"2026-10-27");fs::create_directory(path);
+        error(503,[&]{e.book_group(group({"A","B","C"}));});
+        require(e.manifest(desk())["passengers"].empty() && e.journey(key())["counts"]["available"]==12,"failed group save published partial memory state");
+        fs::remove(path);auto saved=e.book_group(group({"A","B","C"}));require(saved["tickets"][0]["passenger_id"]=="P000001" && saved["tickets"][2]["passenger_id"]=="P000003","failed group save consumed IDs");
+        ReservationEngine reloaded(path,"2026-10-27");require(reloaded.manifest(desk())["passengers"].size()==3,"saved group did not reload as ordinary records");
+    });
+    test("invalid final group member preserves existing storage bytes", [] {
+        Temp tmp;const auto path=tmp.dir/"state.json";ReservationEngine e(path,"2026-10-27");e.book(booking("Existing"));
+        auto read=[&]{std::ifstream file(path,std::ios::binary);return std::string((std::istreambuf_iterator<char>(file)),{});};const auto before=read();
+        auto request=group({"New A","New B","Invalid Last"});request["passengers"][2]["age"]=0;field_error(400,"passengers.2.age",[&]{e.book_group(request);});
+        require(read()==before && e.manifest(desk())["passengers"].size()==1,"invalid group changed persisted bytes or existing records");
+    });
+    test("group tickets persist independently with waiting positions and cancellation history", [] {
+        Temp tmp;const auto path=tmp.dir/"state.json";json tickets;
+        {ReservationEngine e(path,"2026-10-27");for(int i=0;i<11;++i)e.book(booking("Existing "+std::to_string(i)));tickets=e.book_group(group({"Saved A","Saved B","Saved C"}))["tickets"];e.cancel(auth(tickets[1]));}
+        ReservationEngine loaded(path,"2026-10-27");require(loaded.ticket(auth(tickets[0]))["ticket"]["seat_number"]==12 && loaded.ticket(auth(tickets[1]))["ticket"]["status"]=="Cancelled" && loaded.ticket(auth(tickets[2]))["ticket"]["queue_position"]==1,"ordinary storage lost group statuses");
+        auto next=loaded.book(booking("After Restart"))["ticket"];require(next["passenger_id"]=="P000015" && next["queue_position"]==2,"group restart reused ID or lost FIFO");
+    });
+    // Break caught: two concurrent groups may otherwise interleave allocation, share seats or lose records.
+    test("concurrent groups commit whole groups with unique seats and continuous FIFO positions", [] {
+        ReservationEngine e({},"2026-10-27");std::atomic<int> errors{0};std::vector<std::thread> threads;std::mutex results_mutex;std::vector<json> responses;
+        for(int i=0;i<5;++i)threads.emplace_back([&,i]{try {auto request=group({"Member A","Member B","Member C","Member D"},"987654321"+std::to_string(i));auto response=e.book_group(request);const std::lock_guard guard(results_mutex);responses.push_back(response);}catch(...){++errors;}});
+        for(auto& thread:threads)thread.join();
+        require(errors==0 && responses.size()==5,"concurrent groups failed or lost response");
+        auto manifest=e.manifest(desk());require(manifest["passengers"].size()==12 && manifest["waiting"].size()==8,"concurrent group record loss");
+        std::set<int> seats,positions;std::set<std::string> refs;
+        for(const auto& ticket:manifest["passengers"]){seats.insert(ticket["seat_number"].get<int>());refs.insert(ticket["reference"].get<std::string>());}
+        for(const auto& ticket:manifest["waiting"]){positions.insert(ticket["queue_position"].get<int>());refs.insert(ticket["reference"].get<std::string>());}
+        require(seats.size()==12 && positions==std::set<int>({1,2,3,4,5,6,7,8}) && refs.size()==20,"concurrent groups duplicated seat, reference or FIFO position");
+        for(const auto& response:responses) {
+            require(response["counts"]["confirmed"]==4 || response["counts"]["waiting"]==4,"concurrent group commit was interleaved");
+            const auto first=response["tickets"][0]["passenger_id"].get<std::string>();const int start=std::stoi(first.substr(1));
+            for(int i=1;i<4;++i)require(std::stoi(response["tickets"][i]["passenger_id"].get<std::string>().substr(1))==start+i,"group IDs interleaved with another transaction");
+        }
     });
     std::cout << passed << " passed, " << failed << " failed\n";
     return failed ? 1 : 0;

@@ -9,8 +9,12 @@
     view: "home",
     selected: null,
     journey: null,
-    preferredSeat: null,
-    passenger: null,
+    passengers: [{ uid: 1, name: "", age: "", gender: "", seat_number: null }],
+    nextPassengerId: 2,
+    activePassenger: 1,
+    reviewing: null,
+    receipt: null,
+    receiptVersion: 0,
     ticket: null,
     demo: false,
     demoReady: false,
@@ -172,6 +176,7 @@
   function show(view, nav = view, focus = true) {
     cancelReads("catalog");
     state.view = view;
+    document.body.dataset.view = view;
     for (const section of document.querySelectorAll("main>.view")) section.hidden = section.id !== `${view}-view`;
     for (const link of document.querySelectorAll(".main-nav [data-nav]")) {
       const active = link.dataset.nav === nav;
@@ -222,8 +227,18 @@
   function validationError(summaryId, fields) {
     if (!Object.keys(fields).length) return false;
     for (const [id, message] of Object.entries(fields)) fieldError(id, message);
-    notice(summaryId, "Please check the highlighted details and try again.");
-    $(Object.keys(fields)[0]).focus();
+    notice(summaryId, "Please check these details and try again.");
+    const list = node("ul", "error-links");
+    for (const [id, message] of Object.entries(fields)) {
+      const item = node("li");
+      const link = node("a", "", message);
+      link.href = `#${id}`;
+      link.addEventListener("click", (event) => { event.preventDefault(); $(id)?.focus(); });
+      item.append(link);
+      list.append(item);
+    }
+    $(summaryId).append(list);
+    $(summaryId).focus();
     return true;
   }
 
@@ -344,28 +359,187 @@
     return result;
   }
 
+  function maxPassengers() {
+    return Math.min(6, Math.max(1, Number(state.catalog?.max_passengers_per_booking) || 6));
+  }
+
+  function activePassenger() {
+    return state.passengers.find((passenger) => passenger.uid === state.activePassenger) || state.passengers[0];
+  }
+
+  function travellerLabel(passenger) {
+    const index = state.passengers.indexOf(passenger) + 1;
+    return `Traveller ${index}${passenger.name.trim() ? ` · ${passenger.name.trim()}` : ""}`;
+  }
+
+  function passengerField(passenger, key, label, options = {}) {
+    const field = node("div", `field${options.full ? " full" : ""}`);
+    const id = `traveller-${passenger.uid}-${key}`;
+    const labelNode = node("label", "", label);
+    labelNode.htmlFor = id;
+    const control = node(key === "gender" ? "select" : "input");
+    control.id = id;
+    control.name = `travellers[${passenger.uid}][${key}]`;
+    if (key === "gender") {
+      for (const value of ["", "Female", "Male", "Other", "Prefer not to say"]) {
+        const option = node("option", "", value || "Select gender");
+        option.value = value;
+        control.append(option);
+      }
+    } else if (key === "age") {
+      control.type = "number";
+      control.min = "1";
+      control.max = "120";
+      control.inputMode = "numeric";
+      control.placeholder = "Years";
+    } else {
+      control.type = "text";
+      control.maxLength = 100;
+      control.autocomplete = "off";
+      control.placeholder = "As you’d like it on the ticket";
+    }
+    control.required = true;
+    control.value = passenger[key];
+    control.setAttribute("aria-describedby", `${id}-error`);
+    control.addEventListener(key === "gender" ? "change" : "input", () => {
+      passenger[key] = control.value;
+      if (key === "name") updateTravellerOptions();
+    });
+    const error = node("small", "field-error");
+    error.id = `${id}-error`;
+    field.append(labelNode, control, error);
+    return field;
+  }
+
+  function renderPassengers(focusUid) {
+    const rows = $("passenger-rows");
+    rows.replaceChildren();
+    for (const [index, passenger] of state.passengers.entries()) {
+      const row = node("fieldset", "traveller-row");
+      row.id = `traveller-${passenger.uid}`;
+      row.append(node("legend", "", `Traveller ${index + 1}`));
+      const tools = node("div", "traveller-tools");
+      const remove = action(`Remove traveller ${index + 1}`, "text-button danger", () => removeTraveller(passenger.uid));
+      remove.disabled = state.passengers.length === 1;
+      tools.append(remove);
+      const fields = node("div", "passenger-fields");
+      fields.append(passengerField(passenger, "name", "Full name", { full: true }), passengerField(passenger, "age", "Age"), passengerField(passenger, "gender", "Gender"));
+      const preference = node("div", "traveller-seat-summary");
+      const summary = node("span");
+      summary.id = `traveller-${passenger.uid}-preference`;
+      const choose = action("Choose seat", "text-button", () => selectActiveTraveller(passenger.uid, true));
+      choose.id = `traveller-${passenger.uid}-seat_number`;
+      choose.setAttribute("aria-label", `Choose seat for traveller ${index + 1}`);
+      choose.setAttribute("aria-describedby", `${choose.id}-error`);
+      preference.append(summary, choose);
+      const error = node("small", "field-error");
+      error.id = `${choose.id}-error`;
+      row.append(tools, fields, preference, error);
+      rows.append(row);
+    }
+    if (!state.passengers.some((passenger) => passenger.uid === state.activePassenger)) state.activePassenger = state.passengers[0].uid;
+    $("add-traveller").disabled = state.passengers.length >= maxPassengers();
+    $("traveller-count").textContent = `${state.passengers.length} of ${maxPassengers()} travellers${state.passengers.length === maxPassengers() ? " · Maximum reached" : ""}`;
+    $("traveller-limit-hint").textContent = `Add 1–${maxPassengers()} travellers. Each person receives their own ticket reference.`;
+    updateTravellerOptions();
+    updatePartySummary();
+    if (focusUid) $(`traveller-${focusUid}-name`)?.focus();
+  }
+
+  function updateTravellerOptions() {
+    const select = $("seat-traveller");
+    select.replaceChildren();
+    for (const passenger of state.passengers) {
+      const option = node("option", "", travellerLabel(passenger));
+      option.value = passenger.uid;
+      select.append(option);
+    }
+    select.value = String(state.activePassenger);
+    updatePreferenceLabels();
+    const active = activePassenger();
+    $("active-seat-note").textContent = `Editing ${travellerLabel(active)}. Other travellers’ selected seats are marked “Your party”.`;
+    if (state.journey) renderSeats();
+  }
+
+  function updatePreferenceLabels() {
+    for (const passenger of state.passengers) {
+      const summary = $(`traveller-${passenger.uid}-preference`);
+      if (summary) summary.textContent = passenger.seat_number === null ? "Seat: automatic allocation" : `Preferred seat: ${passenger.seat_number}`;
+      const button = $(`traveller-${passenger.uid}-seat_number`);
+      if (button) button.textContent = passenger.uid === state.activePassenger ? "Editing seat" : "Choose seat";
+      $(`traveller-${passenger.uid}`)?.classList.toggle("active-traveller", passenger.uid === state.activePassenger);
+    }
+  }
+
+  function addTraveller() {
+    if (state.busy || state.passengers.length >= maxPassengers()) return;
+    const passenger = { uid: state.nextPassengerId++, name: "", age: "", gender: "", seat_number: null };
+    state.passengers.push(passenger);
+    state.activePassenger = passenger.uid;
+    clearErrors("passenger-form", "passenger-error");
+    renderPassengers(passenger.uid);
+  }
+
+  function removeTraveller(uid) {
+    if (state.busy || state.passengers.length === 1) return;
+    const index = state.passengers.findIndex((passenger) => passenger.uid === uid);
+    state.passengers.splice(index, 1);
+    if (state.activePassenger === uid) state.activePassenger = state.passengers[Math.min(index, state.passengers.length - 1)].uid;
+    clearErrors("passenger-form", "passenger-error");
+    renderPassengers();
+    $(`traveller-${state.activePassenger}-name`)?.focus();
+  }
+
+  function selectActiveTraveller(uid, focus = false) {
+    if (state.busy) return;
+    state.activePassenger = uid;
+    $("seat-traveller").value = String(uid);
+    updateTravellerOptions();
+    if (focus) $("seat-traveller").focus();
+  }
+
+  function clearUnavailablePreferences(journey) {
+    const lost = [];
+    for (const passenger of state.passengers) {
+      if (passenger.seat_number !== null && journey.seats.find((seat) => seat.number === passenger.seat_number)?.status !== "Available") {
+        lost.push(travellerLabel(passenger));
+        passenger.seat_number = null;
+      }
+    }
+    return lost;
+  }
+
   async function chooseJourney(serviceId, date, demo) {
     if (state.busy) return;
+    const changed = !state.selected || state.selected.service_id !== serviceId || state.selected.date !== date || state.selected.demo !== demo;
+    const hadPreferences = state.passengers.some((passenger) => passenger.seat_number !== null);
+    if (changed) for (const passenger of state.passengers) passenger.seat_number = null;
     state.selected = { service_id: serviceId, date, demo };
-    state.preferredSeat = null;
+    state.reviewing = null;
     state.journey = null;
     clearErrors("passenger-form", "passenger-error");
     show("details", demo ? "demo" : "home");
+    renderPassengers();
     $("back-results").replaceChildren(icon("back"), document.createTextNode(demo ? "Back to demonstration" : "Back to journeys"));
     $("details-journey").replaceChildren();
     $("seat-map").replaceChildren();
-    $("seat-status").textContent = "";
+    $("seat-status").textContent = changed && hadPreferences ? "Your traveller details are saved. Choose seat preferences for this new journey." : "";
+    $("party-availability").textContent = "";
     $("seat-loading").hidden = false;
     $("details-fare").textContent = "";
+    $("details-fare-breakdown").textContent = "";
     $("continue-review").disabled = true;
     $("auto-seat").disabled = true;
     try {
       const journey = await refreshJourney();
+      const lost = clearUnavailablePreferences(journey);
       journeyStrip("details-journey", journey);
-      $("details-fare").textContent = money(journey.service.fare);
       renderSeats();
+      updatePartySummary();
       $("continue-review").disabled = false;
       $("auto-seat").disabled = false;
+      if (lost.length) notice("passenger-error", `Some preferred seats are no longer available (${lost.join(", ")}). Those travellers now use automatic allocation; please check before continuing.`);
+      else if (changed && hadPreferences) $("seat-status").textContent += " Your traveller details are saved; previous seat preferences were cleared for this new journey.";
     } catch (error) {
       if (error.name !== "AbortError") {
         state.journey = null;
@@ -378,6 +552,7 @@
   function renderSeats() {
     const journey = state.journey;
     if (!journey) return;
+    const passenger = activePassenger();
     const train = journey.service.mode === "Train";
     $("seat-layout-description").textContent = train ? "18 seats · 3 + 3 seating · Sample coach" : "12 seats · 2 + 2 seating · Sample bus";
     const cabin = node("div", `seat-cabin${train ? " train-cabin" : ""}`);
@@ -386,40 +561,68 @@
     if (!train) front.append(node("span", "steering-wheel"));
     const grid = node("div", `seat-grid${train ? " train-seats" : ""}`);
     grid.setAttribute("role", "group");
-    grid.setAttribute("aria-label", `${journey.service.mode} seat selection`);
+    grid.setAttribute("aria-label", `${journey.service.mode} seats for ${travellerLabel(passenger)}`);
     const eachSide = train ? 3 : 2;
     journey.seats.forEach((seat, index) => {
       if (index % (eachSide * 2) === eachSide) grid.append(node("span", "seat-aisle"));
       const booked = seat.status === "Booked";
-      const selected = seat.number === state.preferredSeat;
-      const button = action(String(seat.number), `seat${booked ? " booked" : ""}${selected ? " selected" : ""}`, () => {
-        state.preferredSeat = seat.number;
+      const owner = state.passengers.find((person) => person.seat_number === seat.number && person.uid !== passenger.uid);
+      const selected = seat.number === passenger.seat_number;
+      const button = action(String(seat.number), `seat${booked ? " booked" : owner ? " claimed" : ""}${selected ? " selected" : ""}`, () => {
+        if (state.busy || state.passengers.some((person) => person.uid !== passenger.uid && person.seat_number === seat.number)) return;
+        passenger.seat_number = seat.number;
         renderSeats();
+        updatePreferenceLabels();
+        updatePartySummary();
         $("seat-map").querySelector(`[data-seat="${seat.number}"]`)?.focus({ preventScroll: true });
       });
       button.dataset.seat = seat.number;
-      button.disabled = booked;
-      button.setAttribute("aria-label", `Seat ${seat.number}, ${booked ? "booked" : selected ? "selected" : "available"}`);
+      button.disabled = booked || Boolean(owner);
+      button.setAttribute("aria-label", `Seat ${seat.number}, ${booked ? "booked" : owner ? `selected for ${travellerLabel(owner)}` : selected ? `selected for ${travellerLabel(passenger)}` : "available"}`);
       button.setAttribute("aria-pressed", String(selected));
       grid.append(button);
     });
     cabin.append(front, grid);
     $("seat-map").replaceChildren(cabin);
-    const automatic = state.preferredSeat === null;
+    const automatic = passenger.seat_number === null;
     $("auto-seat").classList.toggle("active", automatic);
     $("auto-seat").setAttribute("aria-pressed", String(automatic));
-    $("seat-status").textContent = !journey.counts.available
-      ? `This service is full. You’ll join the waiting queue after ${journey.counts.waiting} ${journey.counts.waiting === 1 ? "traveller" : "travellers"}. A seat is assigned when a confirmed reservation is cancelled.`
-      : automatic ? `${journey.counts.available} seats available. We’ll assign the lowest free seat when you reserve.`
-        : `Seat ${state.preferredSeat} selected. It will be checked again when you reserve.`;
+    $("auto-seat").setAttribute("aria-label", `Automatic seat allocation for ${travellerLabel(passenger)}`);
+    $("seat-status").textContent = `${travellerLabel(passenger)}: ${automatic ? "automatic allocation" : `preferred seat ${passenger.seat_number}`}. Selections are checked again when you reserve.`;
+    updatePreferenceLabels();
   }
 
-  function readPassenger() {
+  /* Mirrors the disclosed allocation order for a preview; C++ makes the final allocation. */
+  function previewAllocations(journey, passengers) {
+    const free = journey.seats.filter((seat) => seat.status === "Available").map((seat) => seat.number).sort((a, b) => a - b);
+    const reserved = new Set(passengers.filter((passenger) => passenger.seat_number !== null).map((passenger) => passenger.seat_number));
+    const automaticSeats = free.filter((seat) => !reserved.has(seat));
+    let queuePosition = journey.counts.waiting;
+    return passengers.map((passenger) => {
+      const seat = passenger.seat_number !== null ? passenger.seat_number : (automaticSeats.shift() ?? null);
+      return { uid: passenger.uid, status: seat !== null ? "Confirmed" : "Waiting", seat_number: seat, queue_position: seat === null ? ++queuePosition : null };
+    });
+  }
+
+  function updatePartySummary() {
+    if (!state.journey) return;
+    const count = state.passengers.length;
+    const fare = state.journey.service.fare;
+    $("details-fare").textContent = money(fare * count);
+    $("details-fare-breakdown").textContent = `${count} ${count === 1 ? "traveller" : "travellers"} × ${money(fare)} per person`;
+    const available = state.journey.counts.available;
+    const confirmed = Math.min(available, count);
+    const waiting = count - confirmed;
+    $("party-availability").classList.toggle("has-waiting", waiting > 0);
+    $("party-availability").textContent = waiting
+      ? `${available} ${available === 1 ? "seat is" : "seats are"} available for ${count} ${count === 1 ? "traveller" : "travellers"}. ${confirmed} ${confirmed === 1 ? "person is" : "people are"} expected to be confirmed and ${waiting} to join the waiting queue. Selected seats are reserved first; remaining places follow traveller order.`
+      : `There are enough seats for all ${count} ${count === 1 ? "traveller" : "travellers"} right now. Selected seats are reserved first, then automatic seats use the lowest free numbers.`;
+  }
+
+  function readParty() {
     return {
-      name: $("passenger-name").value.trim(),
       contact: $("passenger-contact").value.trim(),
-      age: Number($("passenger-age").value),
-      gender: $("passenger-gender").value
+      passengers: state.passengers.map((passenger) => ({ name: passenger.name.trim(), age: Number(passenger.age), gender: passenger.gender, seat_number: passenger.seat_number }))
     };
   }
 
@@ -427,25 +630,40 @@
     event.preventDefault();
     if (state.busy || !state.journey) return;
     clearErrors("passenger-form", "passenger-error");
-    const passenger = readPassenger();
+    const party = readParty();
     const fields = {};
-    if (!passenger.name) fields["passenger-name"] = "Enter the traveller’s full name.";
-    if (!/^[+\d\s()-]+$/.test(passenger.contact) || !/^\d{10,15}$/.test(passenger.contact.replace(/[+\s()-]/g, ""))) fields["passenger-contact"] = "Enter a valid contact number with 10–15 digits.";
-    if (!$("passenger-age").value || !Number.isInteger(passenger.age) || passenger.age < 1 || passenger.age > 120) fields["passenger-age"] = "Enter a whole age from 1 to 120.";
-    if (!passenger.gender) fields["passenger-gender"] = "Select a gender option.";
+    if (!/^[+\d\s()-]+$/.test(party.contact) || !/^\d{10,15}$/.test(party.contact.replace(/[+\s()-]/g, ""))) fields["passenger-contact"] = "Contact number: enter 10–15 digits.";
+    const preferred = new Set();
+    const names = new Set();
+    state.passengers.forEach((passenger, index) => {
+      const prefix = `traveller-${passenger.uid}`;
+      const member = party.passengers[index];
+      if (!member.name) fields[`${prefix}-name`] = `Traveller ${index + 1}: enter a full name.`;
+      else if (names.has(member.name.toLocaleLowerCase())) fields[`${prefix}-name`] = `Traveller ${index + 1}: each traveller’s name must be different for this shared contact.`;
+      else names.add(member.name.toLocaleLowerCase());
+      if (!passenger.age || !Number.isInteger(member.age) || member.age < 1 || member.age > 120) fields[`${prefix}-age`] = `Traveller ${index + 1}: enter a whole age from 1 to 120.`;
+      if (!member.gender) fields[`${prefix}-gender`] = `Traveller ${index + 1}: select a gender option.`;
+      if (member.seat_number !== null) {
+        if (preferred.has(member.seat_number)) fields[`${prefix}-seat_number`] = `Traveller ${index + 1}: choose a different seat; this one is selected by another traveller.`;
+        preferred.add(member.seat_number);
+      }
+    });
     if (validationError("passenger-error", fields)) return;
-    state.passenger = passenger;
+    state.reviewing = null;
     formBusy($("passenger-form"), true);
     state.journey = null;
     $("seat-map").replaceChildren();
     $("seat-loading").hidden = false;
     try {
       const journey = await refreshJourney();
-      if (state.preferredSeat !== null && journey.seats.find((seat) => seat.number === state.preferredSeat)?.status !== "Available") {
-        state.preferredSeat = null;
-        renderSeats();
-        throw new ApiError("That seat has just been booked. Please choose another seat or use automatic allocation.");
+      const lost = clearUnavailablePreferences(journey);
+      renderSeats();
+      updatePartySummary();
+      if (lost.length) {
+        throw new ApiError(`Preferred seats are no longer available for ${lost.join(", ")}. Their preferences have changed to automatic; please check the seat choices and review again.`);
       }
+      if (JSON.stringify(readParty()) !== JSON.stringify(party)) throw new ApiError("Traveller details changed while we checked availability. Your changes are saved; please review the updated details again.");
+      state.reviewing = party;
       renderReview();
       show("review", journey.demo ? "demo" : "home");
     } catch (error) {
@@ -460,14 +678,26 @@
 
   function renderReview() {
     const journey = state.journey;
-    const passenger = state.passenger;
-    const sheet = node("div", "review-sheet");
-    const traveller = node("section");
-    traveller.append(node("h2", "", "The traveller"));
-    const details = node("dl");
-    details.append(dataCell("Full name", passenger.name), dataCell("Contact number", passenger.contact),
-      dataCell("Age", `${passenger.age} years`), dataCell("Gender", passenger.gender));
-    traveller.append(details);
+    const party = state.reviewing;
+    const allocations = previewAllocations(journey, state.passengers);
+    const sheet = node("div", "review-sheet group-review");
+    const travellers = node("section", "review-travellers");
+    travellers.append(node("h2", "", `Your ${party.passengers.length === 1 ? "traveller" : `${party.passengers.length} travellers`}`));
+    const contact = node("p", "review-contact", `Shared contact: ${party.contact}`);
+    travellers.append(contact);
+    party.passengers.forEach((passenger, index) => {
+      const allocation = allocations[index];
+      const row = node("div", "review-traveller-row");
+      const title = node("div", "review-traveller-heading");
+      title.append(node("h3", "", `${index + 1}. ${passenger.name}`), statusBadge(allocation.status));
+      const details = node("dl");
+      details.append(dataCell("Age / gender", `${passenger.age} / ${passenger.gender}`),
+        dataCell("Preference", passenger.seat_number === null ? "Automatic" : `Seat ${passenger.seat_number}`),
+        dataCell("Expected allocation", allocation.seat_number === null ? `Waiting · queue ${allocation.queue_position}` : `Seat ${allocation.seat_number}`),
+        dataCell("Sample fare", money(journey.service.fare)));
+      row.append(title, details);
+      travellers.append(row);
+    });
     const side = node("section", "review-side");
     side.append(node("h2", "", "The journey"));
     const service = node("div", "review-service");
@@ -475,65 +705,158 @@
       node("p", "", `${journey.service.name} · ${journey.service.number} · ${journey.service.mode}`),
       node("p", "", `${dateLabel(journey.date, true)} · ${journey.service.departure} – ${journey.service.arrival}${journey.service.arrival_day_offset ? " (+1 day)" : ""}`));
     if (journey.demo) service.append(node("span", "tag", "Fictional demonstration"));
-    const expected = journey.counts.available ? "Confirmed" : "Waiting";
-    const seat = state.preferredSeat === null ? (journey.counts.available ? "Automatic · lowest available" : `Waiting queue · position ${journey.counts.waiting + 1}`) : `Seat ${state.preferredSeat}`;
-    const allocation = node("dl");
-    const status = dataCell("Expected status", "");
-    status.querySelector("dd").append(statusBadge(expected));
-    allocation.append(dataCell("Seat preference", seat), status);
+    const confirmed = allocations.filter((allocation) => allocation.status === "Confirmed").length;
+    const waiting = allocations.length - confirmed;
+    const warning = node("p", `review-allocation-note${waiting ? " has-waiting" : ""}`, waiting
+      ? `${confirmed} expected confirmed · ${waiting} expected waiting. Travellers marked Waiting will not have a seat yet. They join after the existing queue and will receive seats in queue order when cancellations occur.`
+      : `All ${allocations.length} ${allocations.length === 1 ? "traveller is" : "travellers are"} expected to receive a confirmed seat.`);
     const total = node("div", "fare-total");
-    total.append(node("span", "", "Total fare"), node("strong", "", money(journey.service.fare)));
-    side.append(service, allocation, total, node("p", "muted small", "No payment is collected. Your final seat or queue position appears on the ticket."));
-    sheet.append(traveller, side);
+    total.append(node("span", "", "Total sample fare"), node("strong", "", money(journey.service.fare * party.passengers.length)));
+    side.append(service, warning, node("p", "muted small", "Selected seats are reserved first. Automatic allocation uses the lowest remaining seats, in traveller order. Final allocations can change until confirmation."), total,
+      node("p", "muted small", `${party.passengers.length} × ${money(journey.service.fare)} · includes waiting travellers. No payment is collected.`));
+    sheet.append(travellers, side);
     $("review-content").replaceChildren(sheet);
+    $("confirm-booking").replaceChildren(document.createTextNode(party.passengers.length === 1 ? "Reserve my place" : `Reserve ${party.passengers.length} places`), icon("arrow"));
     notice("review-error", "");
   }
 
-  const passengerFieldMap = {
-    name: "passenger-name", age: "passenger-age", gender: "passenger-gender", contact: "passenger-contact",
-    "passenger.name": "passenger-name", "passenger.age": "passenger-age", "passenger.gender": "passenger-gender", "passenger.contact": "passenger-contact"
-  };
+  function groupFieldMap() {
+    const fields = { contact: "passenger-contact" };
+    state.passengers.forEach((passenger, index) => {
+      for (const key of ["name", "age", "gender", "seat_number"]) fields[`passengers.${index}.${key}`] = `traveller-${passenger.uid}-${key}`;
+    });
+    return fields;
+  }
 
   async function confirmBooking() {
-    if (state.busy || !state.passenger || !state.journey) return;
+    if (state.busy || !state.reviewing || !state.journey) return;
     notice("review-error", "");
     const button = $("confirm-booking");
     const oldText = button.textContent;
-    button.textContent = "Reserving your place…";
+    button.textContent = "Reserving your places…";
     try {
-      const result = await mutate("/api/book", { ...state.selected, passenger: state.passenger, seat_number: state.preferredSeat });
+      const result = await mutate("/api/book/group", { ...state.selected, ...state.reviewing });
       state.journey = result.journey;
-      state.ticket = result.ticket;
-      renderTicket(result.ticket);
-      show("ticket", result.ticket.demo ? "demo" : "home");
+      state.receipt = { tickets: result.tickets, total_fare: result.total_fare, journey: result.journey };
+      state.receiptVersion++;
+      notice("group-message", "");
+      renderGroupReceipt();
+      show("group", result.journey.demo ? "demo" : "home");
       resetSearchResults();
     } catch (error) {
-      if (Object.keys(error.fields || {}).some((field) => passengerFieldMap[field])) {
+      const fieldMap = groupFieldMap();
+      if (Object.keys(error.fields || {}).some((field) => fieldMap[field])) {
         show("details", state.selected.demo ? "demo" : "home");
-        fail("passenger-error", error, passengerFieldMap);
+        const mapped = {};
+        for (const [key, message] of Object.entries(error.fields)) if (fieldMap[key]) mapped[fieldMap[key]] = message;
+        validationError("passenger-error", mapped);
+        if (error.status === 409) $("passenger-error").append(node("p", "", "No traveller in this request was booked. Update the affected preference and review again."));
       } else {
         fail("review-error", error);
         if (error.status === 409) {
-          const edit = action("Update seats and edit reservation", "text-button", async () => {
-            show("details", state.selected.demo ? "demo" : "home");
-            state.journey = null;
-            $("seat-map").replaceChildren();
-            $("continue-review").disabled = true;
-            try {
-              const journey = await refreshJourney();
-              if (state.preferredSeat !== null && journey.seats.find((seat) => seat.number === state.preferredSeat)?.status !== "Available") state.preferredSeat = null;
-              renderSeats();
-              $("continue-review").disabled = false;
-            } catch (refreshError) { fail("passenger-error", refreshError); }
-          });
+          const edit = action("Refresh seats and edit reservation", "text-button", () => chooseJourney(state.selected.service_id, state.selected.date, state.selected.demo));
           $("review-error").append(node("br"), edit);
         }
       }
     } finally { button.replaceChildren(document.createTextNode(oldText), icon("arrow")); }
   }
 
+  function renderGroupReceipt() {
+    const receipt = state.receipt;
+    if (!receipt || !receipt.tickets.length) return;
+    $("print-group").disabled = false;
+    $("refresh-group").disabled = false;
+    const tickets = receipt.tickets;
+    const first = tickets[0];
+    const confirmed = tickets.filter((ticket) => ticket.status === "Confirmed").length;
+    const waiting = tickets.filter((ticket) => ticket.status === "Waiting").length;
+    const cancelled = tickets.length - confirmed - waiting;
+    $("group-eyebrow").textContent = first.demo ? "Fictional demonstration reservation" : "Good company, one journey";
+    setHeading("group-title", "Your journey, ", "reserved.");
+    $("group-description").textContent = `${confirmed} confirmed · ${waiting} waiting${cancelled ? ` · ${cancelled} cancelled` : ""}. Every traveller has their own reference and uses the same contact number.`;
+    const content = $("group-content");
+    content.replaceChildren();
+    const header = node("div", "group-receipt-header");
+    const route = node("div");
+    route.append(node("h2", "", `${first.service.source} to ${first.service.destination}`), node("p", "", `${first.service.name} · ${first.service.number} · ${first.service.mode}`),
+      node("p", "", `${dateLabel(first.date)} · ${first.service.departure} – ${first.service.arrival}${first.service.arrival_day_offset ? " (+1 day)" : ""}`));
+    const contact = node("div", "group-receipt-contact");
+    contact.append(node("span", "", "Shared contact number"), node("strong", "", first.contact));
+    header.append(route, contact);
+    content.append(header);
+    if (waiting) content.append(node("p", "group-waiting-warning", `${waiting} ${waiting === 1 ? "traveller has" : "travellers have"} a waiting ticket and no seat yet. Queue positions below are current when retrieved. Refresh status or look up each reference to check for promotion.`));
+    for (const [index, ticket] of tickets.entries()) {
+      const row = node("article", "group-ticket-row");
+      const identity = node("div", "group-ticket-person");
+      identity.append(node("p", "ticket-person-number", `Traveller ${index + 1} · ${ticket.passenger_id}`), node("h3", "", ticket.name), node("p", "muted small", `${ticket.age} years · ${ticket.gender}`));
+      const allocation = node("div", "group-ticket-allocation");
+      allocation.append(statusBadge(ticket.status), node("strong", "", ticket.status === "Confirmed" ? `Seat ${ticket.seat_number}` : ticket.status === "Waiting" ? `Queue ${ticket.queue_position}` : "Cancelled"), node("span", "muted small", money(ticket.fare)));
+      const reference = node("div", "group-ticket-reference");
+      reference.append(node("span", "", "Booking reference"), node("strong", "", ticket.reference));
+      const actions = node("div", "group-ticket-actions");
+      actions.append(action("View ticket", "text-button", () => { renderTicket(ticket); show("ticket", ticket.demo ? "demo" : "home"); }));
+      if (ticket.status !== "Cancelled") actions.append(action("Cancel traveller", "text-button danger", () => cancelGroupTicket(ticket)));
+      row.append(identity, allocation, reference, actions);
+      content.append(row);
+    }
+    const total = node("div", "group-receipt-total");
+    total.append(node("p", "", `${tickets.length} ${tickets.length === 1 ? "traveller" : "travellers"} · ${cancelled ? "Original sample total" : "Total sample fare"} · no payment collected`), node("strong", "", money(receipt.total_fare)));
+    content.append(total, node("p", "print-note", "College project • Sample schedules and fares. Each traveller’s booking reference and the shared contact number are needed to find or cancel that ticket."));
+    notice("group-error", "");
+  }
+
+  async function refreshGroupReceipt(message = "") {
+    if (state.busy || !state.receipt) return;
+    const receipt = state.receipt;
+    const version = ++state.receiptVersion;
+    $("group-description").textContent = "Checking current ticket status for every traveller…";
+    $("group-content").replaceChildren(loading("Refreshing every traveller’s ticket…"));
+    $("refresh-group").disabled = true;
+    $("print-group").disabled = true;
+    notice("group-error", "");
+    notice("group-message", "");
+    try {
+      const results = await Promise.all(receipt.tickets.map((ticket, index) => latest(`receipt-${index}`, "/api/ticket", postOptions({ reference: ticket.reference, contact: ticket.contact }))));
+      if (state.receipt !== receipt || state.receiptVersion !== version || state.view !== "group") return;
+      receipt.tickets = results.map((result) => result.ticket);
+      renderGroupReceipt();
+      if (message) notice("group-message", message);
+    } catch (error) {
+      if (error.name !== "AbortError" && state.receipt === receipt && state.receiptVersion === version && state.view === "group") {
+        cancelReads("catalog");
+        $("group-content").replaceChildren();
+        $("group-description").textContent = "Ticket status could not be refreshed. Try again to see the current allocations.";
+        fail("group-error", error);
+        $("group-error").append(node("br"), action("Try refreshing tickets again", "text-button", () => refreshGroupReceipt(message)));
+      }
+    } finally {
+      if (state.receiptVersion === version) {
+        $("refresh-group").disabled = false;
+        $("print-group").disabled = !$("group-content").querySelector(".group-ticket-row");
+      }
+    }
+  }
+
+  function updateReceiptTicket(ticket) {
+    if (!state.receipt) return;
+    state.receipt.tickets = state.receipt.tickets.map((member) => member.reference === ticket.reference ? ticket : member);
+  }
+
+  async function cancelGroupTicket(ticket) {
+    if (state.busy || ticket.status === "Cancelled") return;
+    const description = ticket.status === "Waiting" ? "This traveller will leave the waiting queue. The other travellers keep their reservations." : `Only ${ticket.name}’s reservation will be cancelled. Seat ${ticket.seat_number} goes to the first waiting traveller if there is one. The other reservations remain active.`;
+    if (!await askConfirmation(`Cancel ${ticket.name}’s ticket?`, description, "Cancel traveller")) return;
+    notice("group-error", "");
+    try {
+      const result = await mutate("/api/cancel", { reference: ticket.reference, contact: ticket.contact });
+      updateReceiptTicket(result.cancelled);
+      await refreshGroupReceipt(cancellationMessage(result, ticket.demo));
+    } catch (error) { fail("group-error", error); }
+  }
+
   function renderTicket(ticket) {
     state.ticket = ticket;
+    $("ticket-back-group").hidden = !state.receipt?.tickets.some((member) => member.reference === ticket.reference);
     notice("ticket-error", "");
     notice("ticket-message", "");
     const confirmed = ticket.status === "Confirmed";
@@ -639,6 +962,7 @@
     notice("ticket-error", "");
     try {
       const result = await mutate("/api/cancel", { reference: ticket.reference, contact: ticket.contact });
+      updateReceiptTicket(result.cancelled);
       renderTicket(result.cancelled);
       notice("ticket-message", cancellationMessage(result, ticket.demo));
     } catch (error) { fail("ticket-error", error); }
@@ -901,17 +1225,33 @@
     if (state.selected?.demo) openDesk(true);
     else show("home", "home");
   });
-  $("auto-seat").addEventListener("click", () => { state.preferredSeat = null; renderSeats(); });
+  $("add-traveller").addEventListener("click", addTraveller);
+  $("seat-traveller").addEventListener("change", () => selectActiveTraveller(Number($("seat-traveller").value)));
+  $("auto-seat").addEventListener("click", () => { activePassenger().seat_number = null; renderSeats(); updatePartySummary(); });
   $("passenger-form").addEventListener("submit", reviewReservation);
   $("back-details").addEventListener("click", () => { show("details", state.selected.demo ? "demo" : "home"); renderSeats(); });
   $("confirm-booking").addEventListener("click", confirmBooking);
   $("print-ticket").addEventListener("click", () => window.print());
   $("cancel-ticket").addEventListener("click", cancelTicket);
-  $("ticket-new").addEventListener("click", () => {
+  function startAnotherJourney() {
     $("passenger-form").reset();
-    state.passenger = null;
-    state.preferredSeat = null;
+    state.passengers = [{ uid: state.nextPassengerId++, name: "", age: "", gender: "", seat_number: null }];
+    state.activePassenger = state.passengers[0].uid;
+    state.reviewing = null;
+    state.receipt = null;
+    state.receiptVersion++;
+    renderPassengers();
+    clearErrors("passenger-form", "passenger-error");
     navigate("home");
+  }
+  $("ticket-new").addEventListener("click", startAnotherJourney);
+  $("group-new").addEventListener("click", startAnotherJourney);
+  $("print-group").addEventListener("click", () => window.print());
+  $("refresh-group").addEventListener("click", () => refreshGroupReceipt());
+  $("ticket-back-group").addEventListener("click", () => {
+    if (!state.receipt) return;
+    show("group", state.receipt.tickets[0].demo ? "demo" : "home");
+    refreshGroupReceipt();
   });
   $("lookup-form").addEventListener("submit", lookupTicket);
   $("desk-form").addEventListener("submit", loadManifest);
@@ -926,5 +1266,6 @@
     const destinations = { "#ticket": "lookup", "#desk": "desk", "#demo": "demo" };
     navigate(destinations[location.hash] || "home");
   });
+  renderPassengers();
   initialize();
 })();
