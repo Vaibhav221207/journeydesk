@@ -1,0 +1,17 @@
+# Journey Desk — approved C++ revision
+
+The user approved the revised passenger booking flow on 27 October 2026 and asked for a more attractive UI. The submission uses C++20 for the HTTP API, reservation rules, four data structures and persistence; HTML, CSS and JavaScript provide the browser interface. No Python runtime is required.
+
+The visual direction uses warm ivory, dark navy and burnt orange, an editorial heading, comfortable readable text, clear focus states, and flat service rows. Avoid dashboard cards, unrelated features, and pretending that the sample timetable is live railway information.
+
+Normal journeys start empty. A separate, explicitly labelled fictional demonstration loads a full bus and the original P108/P109/P110 waiting queue without changing normal bookings. Booking begins with transport mode, departure, destination and date. Results show matching direct services, times, fare and availability. The next steps are passenger/seat details, a review, and ticket confirmation with a generated booking reference and print action. Ticket lookup and cancellation use booking reference plus contact number. A distinct reservation desk provides the assignment's passenger list, search and waiting queue. Normal passenger records require the desk access key printed by the local server or configured through an environment variable; the fictional demo is public.
+
+Keep the existing allocation guarantees: lowest free seat by custom min-heap; exact cancelled seat goes to FIFO head; a cancelled waiting record does not release a seat; service/date/demo isolation; save before publishing memory changes; reject corrupt storage rather than overwrite it. Keep cancelled ticket history for lookup. One passenger per reservation is sufficient for this college project.
+
+The four structures are a fixed seat array, custom singly linked booking list, custom linked FIFO queue and custom binary minimum heap. Use standard maps to locate journeys, not to replace the demonstrated structures. The bundled HTTP and JSON libraries are infrastructure; reservation rules and DSA implementations are student-readable C++ source.
+
+Use a small fictional direct-route catalogue for Ahmedabad, Mumbai, Surat and Pune, including Ahmedabad–Mumbai bus and train alternatives and reverse-direction examples. No intermediate-station seat reuse, payment gateway, Tatkal/quota engine, real-time train feed, account system or SMS service is included.
+
+Local JSON persistence makes the downloadable submission self-contained. Package source, build/run instructions, a verified Windows executable, third-party notices, tests and a viva/report document. Provide a Docker deployment path for a C++ host. Do not label the previous PythonAnywhere deployment as the C++ version; publishing the replacement depends on a suitable authenticated host with persistent storage.
+
+Verification covers all four structures, route/date validation, clean initial state, booking, FIFO promotion, preferred seats, lookup authorization, service/date/demo isolation, concurrency, save/reload, failed-save rollback, HTTP validation/security, desktop/mobile browser flow, empty/error states, back navigation and print styling.
